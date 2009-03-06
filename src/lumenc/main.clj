@@ -55,7 +55,7 @@
 
 (defn render 
   "Renders a wave into an actual .wav file."
-  [[file end] form]
+  [[path end] form]
   (let [file (new java.io.File path)
         fos (new java.io.FileOutputStream file)
         bos (new java.io.BufferedOutputStream fos)]

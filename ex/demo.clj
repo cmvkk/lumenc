@@ -8,28 +8,40 @@
   (:use lumenc.standards)
   (:use lumenc.dws))
 
-
-(deftrack unowen
+; an example of defining one track
+(deftrack unowen {:type :note}
   [ d       a      e         a     ]
   [ f       (g a)  g         b     ]
   [ (d5 a4) (e5 f) (e (f e)) (d c) ]
   [ (a4 c5) (g4 a) f         h     ])
 
-(deffilter pchord []
+
+; an example of defining multiple tracks
+(deftrack
+  dm1 dm2 dm3 {:type :note :bpn 2 :oct 3}
+
+  dm1 [ (a c4)  e        (d g)  e        ]
+  dm2 [  r     (r c h h)  h    (h c h h) ]
+  dm3 [  r     (r   e  )  h    (h   e  ) ]
+
+  dm1 [ (d a)   e        b     c5        ]
+  dm2 [  h     (h e h h) b2    a         ]
+  dm3 [  h     (h   c  ) r     r         ])
+
+
+(deffilter guitar [(freq)]
+  (karplus-strong (white-noise freq) freq 1))
+
+
+(deffilter deep-mountain []
   (mix
-          (karplus-strong (white-noise 220) 220 0.98)
-   (shift (karplus-strong (white-noise 330) 330 0.98) (secs 0.05))
-   (shift (karplus-strong (white-noise 440) 440 0.98) (secs 0.1))))
+         (do-track guitar dm1)
+   (gain (do-track guitar dm2) 0.25)
+   (gain (do-track guitar dm3) 0.25)))
 
-(deffilter schord []
-  (mix
-          (sine 440)
-   (shift (sine 660) (secs 0.05))
-   (shift (sine 880) (secs 0.1))))
 
-(render ["demo-chord.wav" (secs 2)]
-  (pchord))
+(render ["unowen.wav" (beats 16)]
+  (do-track guitar (transpose -12 unowen)))
 
-(render ["demo-melody.wav" (secs 8)]
-  (do-track #(karplus-strong (white-noise %) % 0.98) (transpose -12 unowen)))
-
+(render ["deep-mountain.wav" (beats 16)]
+  (deep-mountain))

@@ -88,8 +88,8 @@
   [trk res note-len]
   (if trk
     (if (list? (first trk))
-      (let [inner-res (flatten-track (first trk) [] (/ note-len (count (first trk))))]
-	(recur (next trk) (apply conj res inner-res) note-len))
+      (let [inner-res (flatten-track (first trk) [(or (last res) [\r 0])] (/ note-len (count (first trk))))]
+	(recur (next trk) (apply conj (if (empty? res) res (pop res)) inner-res) note-len))
       (if (= (first trk) 'h)
 	(let [prev-note (last res)]
 	  (recur (next trk) (conj (pop res) [(first prev-note) (+ note-len (second prev-note))]) note-len))
@@ -156,7 +156,10 @@
   "Takes a partially-applied filter and a track object, and applies the track value for each
    note to the filter at the right times, creating a wave of the filter playing that melody."
   [wav (trk)]
-  (let [new-trk (map (fn [[num s e]] [(wav (*chromatic* num)) (beats s) (beats e)]) trk)]
+  (let [new-trk (map (fn [[num s e]]
+		       (if (= num \r)
+			 [(constantly 0)          (beats s) (beats e)]
+			 [(wav (*chromatic* num)) (beats s) (beats e)])) (into [] (next trk)))]
     (wave
      (loop [[[cwav start end] & tail] new-trk]
        (if (and (>= s start) (<= s end))
