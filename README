@@ -1,0 +1,39 @@
+Lumenc - A Clojure framework for generating music.
+
+Running: 
+
+Open the 'lumenc' file and edit the CLOJURE variable to point to your copy of clojure.jar.  Then you can simply do
+
+ ./lumenc your_source_file.clj
+
+and the resultant .wav will be created in your current directory.
+
+
+How to Use:
+
+Lumenc provides three main datastructures: waves, filters, and tracks.
+
+Waves are digital representations of waveforms.  These are what you eventually pass to the 'render' function to create a wav file.  Filters are functions that return waves, and often take them as arguments as well.  'Deffilter' allows for the creation of filters, and calling them mostly works just like a regular function call, with a few caveats.  Tracks are representations of melodies, drum beats, or similar structures.  These can be created with 'deftrack'.
+
+Primitive Operators:
+
+deffilter - 
+Works like defn but is designed to return a waveform.  The difference is that any arguments passed to a filter will be coerced into a wave if they aren't already one.  For example, if the number 440 is passed to a filter, the filter will instead provide a wave producing a constant output of 440.  This allows for easy use of static values in situations where waves would also be acceptable.  
+A good example of this is the 'sine' function, which takes one argument, a frequency.  "(sine 440)" is an acceptable call, producing a wave that represents a 440Hz sine wave.  However, "(sine (pan 440 660 (secs 5)))" is also an acceptable call.  This call to 'pan' produces a wave whose output changes from 440 to 660 over the course of 5 seconds, and the resultant sine wave's frequency will change accordingly.
+This feature can be circumvented by wrapping an arg in the arglist with parentheses.  For example, "(deffilter [foo (bar)] ...)" will produce a filter that takes two arguments.  Anything passed in as foo will be coerced to wave form, but static values passed as bar will be left alone.
+
+wave - 
+This is the primitive operator for creating waves.  It takes a body of code designed to calculate the result of the wave for any sample.  The current sample can be accessed with the variable 's'.  If you want to call other waves to determine their values, this can be done using 's', a for example "(foo s)" would get the result of the wave foo. NOTE: Although possible, it's generally not safe to call a wave with anything other than the current sample number.  Waves are expected to be called in order, so doing otherwise will probably cause the program to fail.
+
+cwave - 
+This works just like wave, but implements caching.  The first argument has to be a value representing the length to be cached.  If this value is a number N, the wave will cache the previous N samples.  If the value is nil, the wave will cache all previous samples.  The previous samples can then be accessed by calling the function 'prev' with a previous sample number, for example "(prev (dec s))" will return the immediately previous sample.  Other waves that call this wave for previous samples will also receive cached values if they're available.
+
+mix/add - 
+These operators take a series of any number of waves and combine them.  'mix' will average the waves together, while 'add' will simply add them together.
+
+stack/rstack - 
+These provide a let-like interface for easy chaining of filters together.  'stack' takes a series of label/wave pairs, and provides that label to represent that wave in future pairs.  The final wave is what's returned, and it doesn't require a label.  'rstack' works similarly but the labels are provided to any waves included, before or after.  This allows for mutual recursion, or chains of filters that feed back on each other.  NOTE: This is typically done with a delay, and the 'rdelay' filter must be used in situations where mutual recursion exists.  Conversely, 'rdelay' should never be used outside of an 'rstack', use 'buffer' instead in those instances.
+
+TRACKS:
+
+More info to come.
