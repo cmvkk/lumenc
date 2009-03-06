@@ -1,0 +1,5 @@
+#!/bin/sh
+
+CLOJURE=/f/prog/clojure/new/clojure-read-only/clojure.jar
+
+java -cp $CLOJURE:`pwd`/src clojure.lang.Script $1 -- $*
