@@ -165,3 +165,13 @@
 	   (recur tail)
 	   0))))))
 
+
+(deffilter do-tracks
+  "Takes a partially-applied filter and a collection of track objects, and mixes the resultant
+   track waves together using do-track."
+  [wav (trks)]
+  (let [wavs (map #(do-track wav %) trks)
+	size (count trks)]
+    (wave
+     (/ (reduce + (map #(% s) wavs)) size))))
+
