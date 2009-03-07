@@ -8,7 +8,6 @@ Open the 'lumenc' file and edit the CLOJURE variable to point to your copy of cl
 
 and the resultant .wav will be created in your current directory.
 
-
 Notes:
 
 This software should be considered pre-pre-alpha.  Although I'll try to keep commits such that the demos always work, the software is likely buggy and certainly the range of filters available right now leaves much to be desired.  Part of the reason I'm doing this is to learn about digital audio synthesis, so the framework provides a platform from which I can test concepts as I learn them.  
@@ -16,6 +15,8 @@ This software should be considered pre-pre-alpha.  Although I'll try to keep com
 It should also be pointed out that the software is very slooooooow.  Often several times slower than real time for even the simplest of tracks.  This is for a few reasons.  The first is that Clojure itself boxes numbers between function calls, so the nature of the chained-closure setup here makes mathematical operations much slower than they might be in plain java, even when using unchecked math which is sometimes possible.  Secondly, many of the filters written herein are written with an emphasis on readability rather than speed.  My goals for this project include putting readability and 'tweakability' of the filters as the first priority, making it easy to use and extend the available filters.  Because the system is not required to run in real time, speed will always take second place to this.  I do hope to optimise whenever possible though.
 
 How to Use:
+
+NOTE: Be sure to take a look at ex/demo.clj for usage examples, and of course look at the source, particularly standards.clj where most of the filters are defined.  The information there probably does a better job of explaining how the framework works than anything I can write below...
 
 Lumenc provides three main datastructures: waves, filters, and tracks.
 
@@ -25,7 +26,9 @@ Primitive Operators:
 
 deffilter - 
 Works like defn but is designed to return a waveform.  The difference is that any arguments passed to a filter will be coerced into a wave if they aren't already one.  For example, if the number 440 is passed to a filter, the filter will instead provide a wave producing a constant output of 440.  This allows for easy use of static values in situations where waves would also be acceptable.  
+
 A good example of this is the 'sine' function, which takes one argument, a frequency.  "(sine 440)" is an acceptable call, producing a wave that represents a 440Hz sine wave.  However, "(sine (pan 440 660 (secs 5)))" is also an acceptable call.  This call to 'pan' produces a wave whose output changes from 440 to 660 over the course of 5 seconds, and the resultant sine wave's frequency will change accordingly.
+
 This feature can be circumvented by wrapping an arg in the arglist with parentheses.  For example, "(deffilter [foo (bar)] ...)" will produce a filter that takes two arguments.  Anything passed in as foo will be coerced to wave form, but static values passed as bar will be left alone.
 
 wave - 
