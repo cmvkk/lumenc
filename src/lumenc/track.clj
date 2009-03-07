@@ -144,10 +144,12 @@
 
 (defn transpose 
   "Given an offset and a track object, offsets the notes in the track by that many semitones."
-  [num trk]
-  (map (fn [cur]
-	 (let [note (first cur)]
-	   (assoc cur 0 (+ note num)))) (rest trk)))
+  [num [mp & trk]]
+  (concat [mp] 
+	  (map (fn [cur]
+		 (let [note (first cur)]
+		   (assoc cur 0 (+ note num)))) 
+	       trk)))
 
 
 ;; FILTERS
