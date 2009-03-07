@@ -1,4 +1,4 @@
-;; lumenc/main.clj
+\;; lumenc/main.clj
 ;; copyright 2009 William D. Lipe (cmvkk)
 
 
@@ -47,7 +47,7 @@
     (.order bb java.nio.ByteOrder/LITTLE_ENDIAN)
     (loop [cur-chunk 0 start 0 end (min chunk-size fend)]
       (doseq [cur (range start end)]
-	(.putInt bb (int (* (form cur) 64))))
+	(.putInt bb (int (unchecked-multiply (int (form cur)) 64))))
       (.write bos (.array bb) 0 (* 4 chunk-size))
       (.position bb 0)
       (when (< cur-chunk *num-chunks*)
@@ -110,26 +110,18 @@
   [name & stuff]
   `(defn ~name ~@(apply get-filter-stuff stuff)))
 
-
-
-;(defmacro wave 
-;  "Creates a wave.  The body can be any clojure code, and the variable s is provided,
-;   bound to the current sample number."
-;  [& forms]
-;  `(fn [~'s] ~@forms))  
-
-
 (defmacro wave
+  "Creates a wave.  Takes a body of clojure code, and the variable s is provided, referring
+   to the current sample number."
   [& forms]
-  `(let [exp# (atom [-1 0])]
+  `(let [~'prev-sample (atom [-1 0])]
      (fn [~'s]
-       (let [[sn# vl#] (deref exp#)]
+       (let [[sn# vl#] (deref ~'prev-sample)]
 	 (if (= ~'s sn#)
 	   vl#
 	   (let [res# (do ~@forms)]
-	     (swap! exp# (constantly [~'s res#]))
+	     (swap! ~'prev-sample (constantly [~'s res#]))
 	     res#))))))
-
 
 (defmacro cwave
   "Returns a 'cached wave'.  Works exactly like a normal wave, with a few exceptions.
@@ -239,3 +231,6 @@
 	   frac# (mod ~s 1)]
        (+ (* frac# (~filt high#))
 	  (* (- 1 frac#) (~filt low#))))))
+
+(defmacro hold []
+  `((deref ~'prev-sample) 1))

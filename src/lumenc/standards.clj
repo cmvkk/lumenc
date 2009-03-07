@@ -183,14 +183,14 @@
 
 ;; EFFECT FILTERS
 
-(deffilter simple-lowpass 
+(deffilter simple-lowpass
   "Defines a simple lowpass filter, which works by averaging the current sample
    against an average of itself and the previous sample."
   [wav]
-  (cwave 10
-    (let [cursamp (int (wav s))
-          prevsamp (int (or (wav (dec s)) 0))]
-      (unchecked-add
+  (wave
+   (let [cursamp (int (wav s))
+	 prevsamp (int (hold))]
+     (unchecked-add
        (unchecked-add (unchecked-divide cursamp 4) (unchecked-divide prevsamp 4))
        (unchecked-divide cursamp 2)))))
 

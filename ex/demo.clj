@@ -30,7 +30,7 @@
 
 
 (deffilter guitar [(freq)]
-  (karplus-strong (white-noise freq) freq 1))
+  (karplus-strong (white-noise freq) freq 0.98))
 
 
 (deffilter deep-mountain []
@@ -40,8 +40,8 @@
    (gain (do-track guitar dm3) 0.25)))
 
 
-(render ["unowen.wav" (beats 16)]
-  (do-track guitar (transpose -12 unowen)))
+(time (render ["unowen.wav" (beats 16)]
+  (do-track guitar (transpose -12 unowen))))
 
-(render ["deep-mountain.wav" (beats 16)]
-  (deep-mountain))
+(time (render ["deep-mountain.wav" (beats 16)]
+  (deep-mountain)))
