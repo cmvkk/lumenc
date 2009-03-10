@@ -1,4 +1,4 @@
-\;; lumenc/main.clj
+;; lumenc/main.clj
 ;; copyright 2009 William D. Lipe (cmvkk)
 
 
@@ -8,6 +8,7 @@
 
 ;; CONSTANTS
 
+(def *total-samples* 0)
 (def *rate* 44100)
 (def *bpm* 120)
 (def *num-chunks* 25)
@@ -53,7 +54,7 @@
       (when (< cur-chunk *num-chunks*)
 	(recur (inc cur-chunk) (+ start chunk-size) (min (+ end chunk-size) fend))))))
 
-(defn render 
+(defn render-fn
   "Renders a wave into an actual .wav file."
   [[path end] form]
   (let [file (new java.io.File path)
@@ -64,6 +65,12 @@
     (write-data bos form 0 end)
     (.flush bos)
     (.close bos)))
+
+(defmacro render
+  [[path end] form]
+  `(binding [*total-samples* ~end]
+     (render-fn [~path ~end] ~form)))
+
 
 ;; OPERATORS
 

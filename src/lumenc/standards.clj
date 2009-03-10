@@ -134,43 +134,6 @@
        (swap! hold assoc (int (mod s size)) new) ;add new sample to buffer
        res)))) ; return old sample
 
-;; BASE WAVEFORMS
-
-(deffilter sine 
-  "Returns a sine wave.  Freq can be a wave, allowing for frequency changes
-   over time."
-  [freq]
-  (wave
-    (int (* *max-amp* (Math/sin (* s (/ (* 2 Math/PI (freq s)) *rate*))))))) 
-
-(deffilter pulse 
-  "Returns a pulse wave.  Freq and duty can both be waves, allowing for their
-   changes over time. Duty should be a number between 0 and 1."
-  [freq duty]
-  (wave
-    (if (< (/ (rem s (/ *rate* (freq s))) (/ *rate* (freq s))) 
-	   (duty s))
-      *max-amp* (- *max-amp*))))
-
-(deffilter square 
-  "Returns a pulse wave with a duty fixed at 0.5."
-  [freq]
-  (pulse freq 0.5))
-
-(deffilter triangle 
-  "Returns a triangle wave.  Freq and duty can both be waves, allowing for their changes
-   over time.  Duty should be a number between 0 and 1, with 0.5 being a pure triangle
-   wave."
-  [freq duty]
-  (wave
-    (if (< (rem (/ s (/ *rate* (freq s))) 1) (duty s))
-      (* *max-amp* (- 1 (/      (rem (/ s (/ *rate* (freq s))) 1)       (duty s)  0.5)))
-      (* *max-amp* (- 1 (/ (- 1 (rem (/ s (/ *rate* (freq s))) 1)) (- 1 (duty s)) 0.5))))))
-
-(deffilter sawtooth 
-  "Returns a triangle wave with the duty fixed at 1."
-  [freq]
-  (triangle freq 1))
 
 (deffilter white-noise 
   "Returns random data, cached to make it deterministic.  Freq indicates the rate
