@@ -3,7 +3,8 @@
 
 (ns lumenc.track
   (:refer-clojure)
-  (:use lumenc.main))
+  (:use lumenc.main)
+  (:use lumenc.standards))
 
 ;; CONSTANTS
 
@@ -157,11 +158,11 @@
 (deffilter do-track 
   "Takes a partially-applied filter and a track object, and applies the track value for each
    note to the filter at the right times, creating a wave of the filter playing that melody."
-  [wav (trk)]
+  [flt (trk)]
   (let [new-trk (map (fn [[num s e]]
-		       (if (= num \r)
-			 [(constantly 0)          (beats s) (beats e)]
-			 [(wav (*chromatic* num)) (beats s) (beats e)])) (into [] (next trk)))]
+			 (if (= num \r)
+			   [(constantly 0)                                             (beats s) (beats e)]
+			   [(parallel (flt (*chromatic* num)) (- (beats e) (beats s))) (beats s) (beats e)])) (into [] (next trk)))]
     (wave
      (loop [[[cwav start end] & tail] new-trk]
        (if (and (>= s start) (<= s end))

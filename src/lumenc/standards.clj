@@ -15,6 +15,24 @@
     (+ (* end   (/ s         len)) 
        (* start (/ (- len s) len)))))
 
+
+(deffilter parallel
+  "Causes a the given wave's generation to be spun off
+   into its own thread, making it concurrent."
+  [wav (tsamps)]
+  (let [#^java.util.concurrent.LinkedBlockingQueue lbq (new java.util.concurrent.LinkedBlockingQueue)
+	 ag (agent nil)]
+     (.add lbq 0)
+     (send ag (fn [a]
+		(try
+		 (loop [s 0]
+		   (.add lbq (wav s))
+		   (when (< s tsamps)
+		     (recur (inc s))))
+		 (catch Exception e (.printStackTrace e)))))
+     (fn [s]
+       (.take lbq))))
+
 (deffilter negate 
   "Negates a wave, flips it upsidown over 0."
   [wav]
