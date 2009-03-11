@@ -1,6 +1,9 @@
 ;; demo.clj
 ;; copyright 2009 William D. Lipe (cmvkk)
 
+;; NOTE: None of this code works anymore, awaiting revision.
+;; look at icarus.clj for a working demo.
+
 (ns lumenc.demo
   (:refer-clojure)
   (:use lumenc.main)

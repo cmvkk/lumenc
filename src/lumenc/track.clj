@@ -76,15 +76,13 @@
 
 ;; TRACK FNS
 
-(defn transpose 
-  "Given an offset and a track object, offsets the notes in the track by that many semitones."
+(defn transpose
+  "Changes the track's key by num semitones."
   [num [mp & trk]]
-  (concat [mp] 
-	  (map (fn [cur]
-		 (let [note (first cur)]
-		   (assoc cur 0 (+ note num)))) 
-	       trk)))
-
-
+  (into [] (cons mp
+		 (map (fn [[val start end]]
+			(if (= val \.)
+			  [0 start end]
+			  [(+ val num) start end])) trk))))
 
 

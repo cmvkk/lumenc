@@ -209,7 +209,8 @@
   "Applies a default type to the track and calls initial-pass on it.  This is
    run during deftrack."
   [[mp & trk]]
-  (initial-pass (into [] (cons (if (:type mp) mp (assoc mp :type :note)) trk))))
+  (initial-pass (into [] (cons (if (:type mp) mp (assoc mp :type :note)) 
+			       (if (= (first trk) [\. 0 0]) (rest trk) trk)))))
 
 (defmulti final-pass (fn [trk] (:type (first trk))))
 
@@ -220,17 +221,22 @@
   (map (fn [[num s e]]
 	 [num (beats s) (beats e)]) (next (final-pass trk))))
 
-(defn track-wave 
+
+(defn finalized-track-wave
+  "Takes an already finalized track and returns a wave that modulates based on its value."
+  [ftrk]
+  (wave
+   (loop [[[val start end] & tail] ftrk]
+     (if (and (>= s start) (<= s end))
+       val
+       (if tail
+	 (recur tail)
+	 0)))))
+
+(defn track-wave
   "Takes a track and returns a wave that modulates based on its value."
   [trk]
-  (let [new-trk (final-p trk)]
-    (wave
-     (loop [[[val start end] & tail] new-trk]
-       (if (and (>= s start) (<= s end))
-	 val
-	 (if tail
-	   (recur tail)
-	   0))))))
+  (finalized-track-wave (final-p trk)))
 
 ;; DEFFILTER
 
@@ -353,3 +359,71 @@
     `(do
        ~@(map (fn [[name trk]]
 		`(def ~name ~(into [] trk))) res))))
+
+;; WITH-TRACK
+
+(defn split-track 
+  "Splits a track at the given sample number.  Track 1 ends at sn, Track 2 starts at sn+1."
+  [trk sn]
+  (if (not (seq trk))
+    [[[0 sn (inc sn)]] []]
+    (loop [track1 [] [c start end] (first trk) track2 (next trk)]
+      (if (and (>= sn start) (<= sn end)) ; splitting at curframe.
+	(if (= sn end) ; even split
+	  [(into [] (concat track1 [[c start end]]))                                     track2]
+	  [(into [] (concat track1 [[c start  sn]])) (into [] (concat [[c (inc sn) end]] track2))])
+	(if track2 ; not at the end
+	  (recur (concat track1 [[c start end]]) (first track2) (next track2))
+	  [(into [] (concat track1 [[c start end]])) nil])))))
+
+(defn set-to-zero
+  "Takes a track and sets it to zero."
+  [trk]
+  (let [sval ((first trk) 2)]
+    (into [] (map (fn [[v s e]]
+		    [v (- s sval) (- e sval)]) trk))))
+
+(defn get-next-track-val
+  "Takes a track, splits it up at sn, and then returns a value
+   for the first part of the track (either a constant value if
+   the first part only contains one note, or a wave modulating
+   on the different notes) plus the rest of the track."
+  [trk sn]
+  (let [[b a] (split-track trk sn)]
+    (if (= (count b) 1)
+      [(first (first b)) a]
+      [(finalized-track-wave (set-to-zero b)) a])))
+
+(defn get-total-track
+  "Helper function for with-track.  Takes a list of tracks and 
+   a function, and splits up the tracks based on the frames in the
+   first track, calling the function with the values produced each time
+   and swapping in the resultant wave."
+  [trks func]
+  (let [[mtrk & rtrks] trks]
+    (loop [[[val start end] & tail] (first trks) rtrks (next trks) res []] 
+      (let [firsts (map #(first (get-next-track-val % end)) rtrks)
+	    seconds (map #(second (get-next-track-val % end)) rtrks)]
+	(if tail
+	  (recur tail seconds (concat res [[(apply func (cons val firsts)) start end]]))
+	  (into [] (concat res [[(apply func (cons val firsts)) start end]])))))))
+
+(defn with-track-fn 
+  "Helper function for with-track.  See with-track."
+  [trks func] 
+  (let [ntrk (get-total-track (map final-p trks) func)]
+    (wave
+     (loop [[[wav start end] & tail] ntrk]
+       (if (and (>= s start) (<= s end))
+	 (wav (- s start))
+	 (if tail
+	   (recur tail)
+	   0))))))
+
+(defmacro with-track 
+  "The with-track form.  Takes a vector of Vars (bound to tracks) and
+   a form they apply to that's expected to return a wave, and it produces
+   a wave based on the tracks application to that form.  A better explanation
+   should be available in the docs..."
+  [trks & form]
+  `(with-track-fn ~trks (fn ~trks ~@form)))

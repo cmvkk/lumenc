@@ -15,6 +15,13 @@
     (+ (* end   (/ s         len)) 
        (* start (/ (- len s) len)))))
 
+(deffilter exp-drop
+  "Equals 1/(c^s) where c is coeff and s is samples.  The higher coeff, the
+   sharper the drop. The values here are pretty small.  A coeff of 1.0002 will
+   drop off in half a second."
+  [(coeff)]
+  (wave
+   (/ 1 (Math/pow coeff s))))
 
 (deffilter parallel
   "Causes a the given wave's generation to be spun off
@@ -139,8 +146,9 @@
   "Returns random data, cached to make it deterministic.  Freq indicates the rate
    at which the data will be repeated, use nil for data that never repeats."
   [(freq)]
-  (let [random (new java.util.Random)
-	size (int (Math/ceil (/ *rate* freq)))]
+  (let [nfreq (if (= freq 0) 1 freq)
+	random (new java.util.Random)
+	size (int (Math/ceil (/ *rate* nfreq)))]
     (cwave size
      (if (< s size)
        (unchecked-divide (.nextInt random) 256) ; 4 to 3 bytes
@@ -161,6 +169,12 @@
   (stack
     p (pan 1 0 len)
     (gain wav p)))
+
+(deffilter pluck-envelope
+  "A volume envelope with an exponential drop, like a plucked string would have."
+  [wav (coeff)]
+  (gain wav (exp-drop coeff)))
+
 
 ;; EFFECT FILTERS
 
