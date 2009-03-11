@@ -3,11 +3,10 @@
 
 (ns lumenc.track
   (:refer-clojure)
-  (:use lumenc.main)
-  (:use lumenc.standards))
+  (:use lumenc.main))
 
-;; CONSTANTS
 
+;; NOTE TRACK
 
 ;;      c       c#      d       d#      e       f       f#      g       g#      a       a#      b
 (def *chromatic* [
@@ -25,19 +24,12 @@
 
 (def *note-nums* {\c 0 \d 2 \e 4 \f 5 \g 7 \a 9 \b 11})
 
-;; TRACK FNS
-
-(defn beats 
-  "Returns the number of samples for a length of time in beats, given *bpm* and *rate*."
-  [time]
-  (int (* *rate* time (/ 60 *bpm*))))
-
 (defn get-note 
   "Given a note symbol, plus a set of options and a current octave, returns the note number for that note."
   [note opts oct]
   (let [note (seq (str note))]
-    (if (= (first note) \r)
-      [\r oct]
+    (if (= (first note) \.)
+      [\. oct]
       (let [cur-oct (if-let [moct (first (filter #(Character/isDigit %) note))]
 		      (Character/digit moct 10)
 		      oct)
@@ -62,86 +54,27 @@
 	(recur tail new-res new-oct)
 	new-res))))
 
-(defmulti get-track (fn [m t] (or (:type m) :note)))
 
-(defmethod get-track :raw [mp trk]
-  (concat [mp] trk))
-
-(defmethod get-track :note [mp trk]
+(defmethod initial-pass :note [[mp & trk]]
   (let [new-trk (get-notes trk mp)]
-    (concat [mp] new-trk)))
+    (into [] (cons mp new-trk))))
 
-(defn do-track-times 
-  "The input track here has only lengths of time in its frames, but what we need is
-   start time and end time.  Uses a running time count to calculate this."
-  [trk]
-  (loop [[[val len] & tail] trk
-	 ntrk []
-	 time 0]
-    (if tail
-      (recur tail (conj ntrk [val time (+ len time)]) (+ len time))
-      (conj ntrk [val time (+ len time)]))))
-    
+(defmethod final-pass :note [[mp & trk]]
+  (into [] (cons mp (map (fn [[note s e]]
+			   [(if (not= \. note)
+			      (*chromatic* note) 0) s e]) trk))))
 
-(defn flatten-track
-  "Given a track input, takes the track and flattens it, returns a vector of 'frames', which contain a note and the 
-   length it is to be played, in beats."
-  [trk res note-len]
-  (if trk
-    (if (list? (first trk))
-      (let [inner-res (flatten-track (first trk) [(or (last res) [\r 0])] (/ note-len (count (first trk))))]
-	(recur (next trk) (apply conj (if (empty? res) res (pop res)) inner-res) note-len))
-      (if (= (first trk) 'h)
-	(let [prev-note (last res)]
-	  (recur (next trk) (conj (pop res) [(first prev-note) (+ note-len (second prev-note))]) note-len))
-	(recur (next trk) (conj res [(first trk) note-len]) note-len)))
-    res))
+;; RAW TRACK
+
+(defmethod initial-pass :raw [trk]
+  trk)
+
+(defmethod final-pass :raw [trk]
+  trk)
 
 
-(defn refine-tracks 
-  "Input here is a map of names connected to a vector of values that are associated with it.  This function
-   joins the values into a full track, then passes the track to get 'flattened' and otherwise edited according
-   to its type."
-  [res]
-  (into {} (map (fn [[name values]]
-		  (let [maps (filter map? values)
-			fmap (or (apply merge maps) {})
-			vecs (filter vector? values)
-			fvec (apply concat vecs)
-			nvec (do-track-times (flatten-track fvec [] (or (:bpn fmap) 1)))]
-		    [name (get-track (or fmap {}) nvec)])) 
-		res)))
-	   
-(defn add-to-res 
-  "Helper function to deftrack-fn, takes a 'chunk' of names and track pieces, and adds them to the result map."
-  [res names data]
-  (merge-with #(into [] (concat %1 %2)) 
-	      res (reduce (fn [sofar name]
-			    (merge-with concat sofar {name (into [] data)}))
-			  {} names)))
 
-(defn deftrack-fn 
-  "Takes the list of names and values, and associates them with each other in a map."
-  [res names data on-name forms]
-  (if forms
-    (if (symbol? (first forms))
-      (if on-name
-	(recur res (conj names (first forms)) data true (next forms))
-	(recur (add-to-res res names data) [] [] true forms))
-      (recur res names (conj data (first forms)) false (next forms)))
-    (if (or names data)
-      (add-to-res res names data)
-      res)))
-
-(defmacro deftrack 
-  "The main macro.  Takes a list of name*/value* pairs and associates
-   them together, binding all the associated values to the name. See
-   documentation elsewhere for details..."
-  [& forms]
-  (let [res (refine-tracks (deftrack-fn {} [] [] true forms))]
-    `(do
-       ~@(map (fn [[name trk]]
-		`(def ~name ~(into [] trk))) res))))
+;; TRACK FNS
 
 (defn transpose 
   "Given an offset and a track object, offsets the notes in the track by that many semitones."
@@ -153,31 +86,5 @@
 	       trk)))
 
 
-;; FILTERS
 
-(deffilter do-track 
-  "Takes a partially-applied filter and a track object, and applies the track value for each
-   note to the filter at the right times, creating a wave of the filter playing that melody."
-  [flt (trk)]
-  (let [new-trk (map (fn [[num s e]]
-			 (if (= num \r)
-			   [(constantly 0)                                             (beats s) (beats e)]
-			   [(parallel (flt (*chromatic* num)) (- (beats e) (beats s))) (beats s) (beats e)])) (into [] (next trk)))]
-    (wave
-     (loop [[[cwav start end] & tail] new-trk]
-       (if (and (>= s start) (<= s end))
-	 (cwav (- s start))
-	 (if tail
-	   (recur tail)
-	   0))))))
-
-
-(deffilter do-tracks
-  "Takes a partially-applied filter and a collection of track objects, and mixes the resultant
-   track waves together using do-track."
-  [wav (trks)]
-  (let [wavs (map #(do-track wav %) trks)
-	size (count trks)]
-    (wave
-     (/ (reduce + (map #(% s) wavs)) size))))
 

@@ -16,6 +16,38 @@
                          ; to write filters with a net gain of 64 before having to worry about
                          ; arithmetic overflow.
 
+;; HELPER FNS
+
+(defn secs 
+  "Uses the Var *rate* to convert seconds to samples."
+  [time]
+  (int (* *rate* time)))
+
+(defn beats 
+  "Returns the number of samples for a length of time in beats, given *bpm* and *rate*."
+  [time]
+  (int (* *rate* time (/ 60 *bpm*))))
+
+(defmacro with-fraction 
+  "Allows you to call a wave with a fractional sample number, for example
+   (with-fraction wav 2.5).  Uses linear interpolation to estimate a result
+   given neighboring samples."
+  [filt s]
+  `(if (integer? ~s)
+     (~filt ~s)
+     (let [high# (int (Math/ceil ~s))
+	   low# (int (Math/floor ~s))
+	   frac# (mod ~s 1)]
+       (+ (* frac# (~filt high#))
+	  (* (- 1 frac#) (~filt low#))))))
+
+(defmacro with-bpm [bpm & forms]
+  `(binding [~'*bpm* ~bpm]
+     ~@forms))
+
+(defmacro hold []
+  `((deref ~'prev-sample) 1))
+
 ;; RENDERER
 
 (defn get-header 
@@ -66,49 +98,6 @@
     (.close bos)))
 
 ;; OPERATORS
-
-(defn get-filter-args
-  "Helper function for deffilter.  Determines the arglist and the list of let bindings
-   for the expanded defn."
-  [args arglist letlist]
-  (let [[arg & tail] args
-	new-arglist (conj arglist (if (list? arg) (first arg) arg))
-	new-letlist (if (list? arg)
-		      letlist
-		      (concat letlist `(~arg (if (fn? ~arg) ~arg (constantly ~arg)))))]
-    (if tail
-      (recur tail new-arglist           new-letlist)
-      [(into []   new-arglist) (into [] new-letlist)] ))) 
-
-(defn get-filter-body
-  "Helpfer function for deffilter.  Takes an arglist and a set of forms and returns an
-   expanded version with the appropriate let bindings."
-  [args & forms]
-  (let [[arglist letlist] (if (first args) (get-filter-args args [] []) [args args])]
-    `(~arglist
-      (let ~letlist
-	~@forms))))
-
-(defn get-filter-stuff
-  "Helpfer function for deffilter.  Takes the 'body' of the filter (including the docstring)
-   and returns an expanded version."
-  [thing & stuff]
-  (if (string? thing)
-    `(~thing ~@(apply get-filter-stuff stuff))
-    (if (list? thing)
-      (if stuff
-	`(~(apply get-filter-body thing) ~@(apply get-filter-stuff stuff))
-	`(~(apply get-filter-body thing)))
-      (get-filter-body thing (first stuff)))))
-
-(defmacro deffilter
-  "Defines a filter.  Works exactly like defn, with the caveat that arguments are somewhat 
-   tampered with.  Namely, any argument passed to deffilter that isn't already a wave will
-   be turned into one (by wrapping it in a call to constantly).  However 'static' arguments
-   can be defined by wrapping the arg in a list.  For example, (deffilter foo [bar (baz)] ...)
-   will turn bar into a wave if it isn't already one, but leave baz alone."
-  [name & stuff]
-  `(defn ~name ~@(apply get-filter-stuff stuff)))
 
 (defmacro wave
   "Creates a wave.  Takes a body of clojure code, and the variable s is provided, referring
@@ -169,7 +158,6 @@
     `(let [~@forms] ~(last (butlast forms)))
     `(let [~@(butlast forms)] ~(last forms))))
 
-
 (defmacro mix
   "Takes a series of waves and averages them together."
   [& forms]
@@ -196,9 +184,7 @@
    potential for causing an infinite loop and blowing the stack.  In particular, remember to use
    the rdelay filter here rather than buffer or shift, and make sure every constituent filter is 
    called at least once without going through your delay, otherwise the result will fail in quiet 
-   and mysterious ways.  This is also the only operator that relies on a filter to work, the 'express'
-   filter which is defined in cmvkk.wav.standards, so you have to have loaded that in order for this
-   to work."
+   and mysterious ways."
   [& forms]
   (let [len (/ (count forms) 2)
 	atomlist (gensym)]
@@ -211,26 +197,159 @@
 	    `(swap! (nth ~atomlist ~i) (fn [x#] ~(nth forms (inc (* i 2)))))) 
 	   (range len)))))
 
-;; HELPER FNS
+(defn track? 
+  "Returns true if object is a track."
+  [mtrk]
+  (and (vector? mtrk)
+       (= (:track (first mtrk)) true)))
 
+(defmulti initial-pass (fn [trk] (:type (first trk))))
 
-(defn secs 
-  "Uses the Var *rate* to convert seconds to samples."
-  [time]
-  (int (* *rate* time)))
+(defn initial-p 
+  "Applies a default type to the track and calls initial-pass on it.  This is
+   run during deftrack."
+  [[mp & trk]]
+  (initial-pass (into [] (cons (if (:type mp) mp (assoc mp :type :note)) trk))))
 
-(defmacro with-fraction 
-  "Allows you to call a wave with a fractional sample number, for example
-   (with-fraction wav 2.5).  Uses linear interpolation to estimate a result
-   given neighboring samples."
-  [filt s]
-  `(if (integer? ~s)
-     (~filt ~s)
-     (let [high# (int (Math/ceil ~s))
-	   low# (int (Math/floor ~s))
-	   frac# (mod ~s 1)]
-       (+ (* frac# (~filt high#))
-	  (* (- 1 frac#) (~filt low#))))))
+(defmulti final-pass (fn [trk] (:type (first trk))))
 
-(defmacro hold []
-  `((deref ~'prev-sample) 1))
+(defn final-p 
+  "Changes beat values to sample values, and calls final-pass.  This is run
+   when the track is changed into a wave or during with-track."
+  [trk]
+  (map (fn [[num s e]]
+	 [num (beats s) (beats e)]) (next (final-pass trk))))
+
+(defn track-wave 
+  "Takes a track and returns a wave that modulates based on its value."
+  [trk]
+  (let [new-trk (final-p trk)]
+    (wave
+     (loop [[[val start end] & tail] new-trk]
+       (if (and (>= s start) (<= s end))
+	 val
+	 (if tail
+	   (recur tail)
+	   0))))))
+
+;; DEFFILTER
+
+(defn get-filter-args
+  "Helper function for deffilter.  Determines the arglist and the list of let bindings
+   for the expanded defn."
+  [args arglist letlist]
+  (let [[arg & tail] args
+	new-arglist (conj arglist (if (list? arg) (first arg) arg))
+	new-letlist (if (list? arg)
+		      letlist
+		      (concat letlist `(~arg (if (fn? ~arg) 
+					       ~arg 
+					       (if (track? ~arg)
+						 (track-wave ~arg)
+						 (constantly ~arg))))))]
+    (if tail
+      (recur tail new-arglist           new-letlist)
+      [(into []   new-arglist) (into [] new-letlist)] ))) 
+
+(defn get-filter-body
+  "Helpfer function for deffilter.  Takes an arglist and a set of forms and returns an
+   expanded version with the appropriate let bindings."
+  [args & forms]
+  (let [[arglist letlist] (if (first args) (get-filter-args args [] []) [args args])]
+    `(~arglist
+      (let ~letlist
+	~@forms))))
+
+(defn get-filter-stuff
+  "Helpfer function for deffilter.  Takes the 'body' of the filter (including the docstring)
+   and returns an expanded version."
+  [thing & stuff]
+  (if (string? thing)
+    `(~thing ~@(apply get-filter-stuff stuff))
+    (if (list? thing)
+      (if stuff
+	`(~(apply get-filter-body thing) ~@(apply get-filter-stuff stuff))
+	`(~(apply get-filter-body thing)))
+      (get-filter-body thing (first stuff)))))
+
+(defmacro deffilter
+  "Defines a filter.  Works exactly like defn, with the caveat that arguments are somewhat 
+   tampered with.  Namely, any argument passed to deffilter that isn't already a wave will
+   be turned into one (by wrapping it in a call to constantly).  However 'static' arguments
+   can be defined by wrapping the arg in a list.  For example, (deffilter foo [bar (baz)] ...)
+   will turn bar into a wave if it isn't already one, but leave baz alone."
+  [name & stuff]
+  `(defn ~name ~@(apply get-filter-stuff stuff)))
+
+;; DEFTRACK
+
+(defn do-track-times 
+  "The input track here has only lengths of time in its frames, but what we need is
+   start time and end time.  Uses a running time count to calculate this."
+  [trk]
+  (loop [[[val len] & tail] trk
+	 ntrk []
+	 time 0]
+    (if tail
+      (recur tail (conj ntrk [val time (+ len time)]) (+ len time))
+      (conj ntrk [val time (+ len time)]))))
+    
+
+(defn flatten-track
+  "Given a track input, takes the track and flattens it, returns a vector of 'frames', which contain a note and the 
+   length it is to be played, in beats."
+  [trk res note-len]
+  (if trk
+    (if (list? (first trk))
+      (let [inner-res (flatten-track (first trk) [(or (last res) [\. 0])] (/ note-len (count (first trk))))]
+	(recur (next trk) (apply conj (if (empty? res) res (pop res)) inner-res) note-len))
+      (if (= (first trk) '*)
+	(let [prev-note (last res)]
+	  (recur (next trk) (conj (pop res) [(first prev-note) (+ note-len (second prev-note))]) note-len))
+	(recur (next trk) (conj res [(first trk) note-len]) note-len)))
+    res))
+
+(defn refine-tracks 
+  "Input here is a map of names connected to a vector of values that are associated with it.  This function
+   joins the values into a full track, then passes the track to get 'flattened' and otherwise edited according
+   to its type."
+  [res]
+  (into {} (map (fn [[name values]]
+		  (let [maps (filter map? values)
+			fmap (or (apply merge maps) {})
+			vecs (filter vector? values)
+			fvec (apply concat vecs)
+			nvec (do-track-times (flatten-track fvec [] (or (:bpn fmap) 1)))]
+		    [name (initial-p (into [] (cons (assoc fmap :track true) nvec)))])) 
+		res)))
+	   
+(defn add-to-res 
+  "Helper function to deftrack-fn, takes a 'chunk' of names and track pieces, and adds them to the result map."
+  [res names data]
+  (merge-with #(into [] (concat %1 %2)) 
+	      res (reduce (fn [sofar name]
+			    (merge-with concat sofar {name (into [] data)}))
+			  {} names)))
+
+(defn deftrack-fn 
+  "Takes the list of names and values, and associates them with each other in a map."
+  [res names data on-name forms]
+  (if forms
+    (if (symbol? (first forms))
+      (if on-name
+	(recur res (conj names (first forms)) data true (next forms))
+	(recur (add-to-res res names data) [] [] true forms))
+      (recur res names (conj data (first forms)) false (next forms)))
+    (if (or names data)
+      (add-to-res res names data)
+      res)))
+
+(defmacro deftrack 
+  "The main macro.  Takes a list of name*/value* pairs and associates
+   them together, binding all the associated values to the name. See
+   documentation elsewhere for details..."
+  [& forms]
+  (let [res (refine-tracks (deftrack-fn {} [] [] true forms))]
+    `(do
+       ~@(map (fn [[name trk]]
+		`(def ~name ~(into [] trk))) res))))
