@@ -1,0 +1,222 @@
+A quick lumenc tutorial:
+
+USING WAVES:
+
+Lumenc is a Clojure framework for generating music.  Music is created in the
+form of 'waves', which are digital representations of waveforms.  The easiest
+way to make a wave is to call a filter.  Filters are just functions that
+return waves.  A good example would be the 'sine' filter.  So
+
+    (sine 440)
+
+returns a wave representing a 440Hz sine wave.  In order to hear it, it has to
+be written out to file, which can be done with 'render'.
+
+    (render ["output.wav" (secs 10)] (sine 440))
+
+This takes a 440Hz sine wave and renders 10 seconds worth of it, outputting to
+the file "output.wav".
+
+Some filters, like 'sine', generate waves from nothing, but a lot of them take
+other waves as arguments.  For example, 'gain' takes a wave and a multiplier
+and multiplies the amplitude by that amount.  So you can do
+
+    (gain (sine 440) 0.5)
+
+and get a 440Hz sine wave twice as quiet as a normal sine wave.  Lots of
+filters can also take waves for their options.  Both 'sine' and 'gain' do
+this.  For example, this is legal:
+
+    (sine (stretch (sine 2) 440 660))
+
+Here the 'stretch' filter takes a wave and two numbers, and changes the
+amplitude so that it goes between the two numbers, rather than the normal
+amplitude.  Calling it with '(sine 2)' produces a sine wave that modulates in
+amplitude between 440 and 660 twice a second.  So if you pass that again to
+'sine', you get a sine wave that modulates in frequency between 440Hz and
+660Hz.  Similar tricks can be done with 'gain', producing fading sounds, pluck
+envelopes, etc.
+
+Lumenc provides a few operators to allow you to combine waves more easily.
+'Stack' and 'rstack' are examples.  Stack works like this:
+
+    (stack
+     foo (sine 2)
+     bar (stretch foo 440 660)
+         (sine bar))
+
+With these let-like bindings, you can combine any number of layers of filters
+together.  It's also generally safe to pass a label to two or more filters if
+you want (producing the same effect as a line split).   'rstack' works the
+same way, only the bottom filter takes a label too.  It provides mutual
+recursion, so any label created is available to any other lable in the rstack,
+before or after.  This can be used with the 'rdelay' filter to create feedback
+loops of filters, useful for echos and other things.
+
+'mix' and 'add' are also available.  These operators take any number of
+filters and merge them together.  'mix' averages their amplitudes, while 'add'
+just adds them.  
+
+   (mix
+    (sine 440)
+    (sine 660))
+
+Finally using deffilter to define chains of filters helps.  For example
+
+    (deffilter quiet-sine [freq]
+      (gain (sine freq) 0.5))
+
+will produce a filter that can then be called like usual.
+
+    (quiet-sine 440)
+
+USING TRACKS:
+
+Tracks are objects representing melodies, or drum beats, or things like that.
+These are generally created with deftrack.  A simple example would be
+
+    (deftrack foo [c d e f g a b c5])
+
+which would bind to the name 'foo' a track representing a C-major scale.  If
+you want to use this to modulate a wave (for example a sine wave) you can just
+use it like a wave itself, for example
+
+    (sine foo)
+
+will produce a sine wave that plays a C-major scale.  Passing the track to a
+filter like that coerces the track into a wave form.  But sometimes this isn't
+the desirable behavior.  For example, if we apply the filter 'fade' to our
+sine:
+
+    (fade (sine foo) (secs 1))
+
+We get a sine that plays a C-major scale, but it fades out after a second, so
+we don't hear it all.  What we want is for the faded sine to restart for every
+note.  This can be done with 'with-track'.  For example
+
+    (with-track [foo] (fade (sine foo) (secs 1)))
+
+By wrapping the form in this macro and giving it the name 'foo', we're telling
+the wave to restart every time 'foo' changes its note.  If you're using two
+or more tracks inside the form, just add those other tracks to the vector to
+keep them from restarting with the form as a whole.  
+
+Deftrack is capable of doing more than just defining a simple scale though.
+For example you can define multiple tracks at once:
+
+   (deftrack
+    foo [c d e f g a  b c5]
+    bar [e f g a b c5 d e ])
+
+If you use the same track name twice, or two track vectors in a row, deftrack
+will concatenate them for you.  If you use two track names before a vector,
+deftrack will apply that vector to both names.  For example
+
+    (deftrack
+     foo bar [c d e f g]
+     foo [a b c5]
+     bar [f e d c])
+
+Both tracks play the same first five notes, then split up after that.  Also
+acceptable:
+
+    (deftrack
+     foo [c d e f]
+     bar [e d g a]
+     foo [g a b c5]
+     bar [b c5 d e])
+
+Which will create the same result as the first multiple track example.   This
+makes it convenient to define several tracks in parallel over multiple lines.
+
+As for the track lengths, all times are measured in 'beats'.  By default, any
+note in a track gets one beat, although this can be changed.  Beat length can
+be defined by wrapping the 'with-bpm' macro around your call to render, i.e.
+
+    (with-bpm 240 (render ["foo.wav" (beats 10)] (my-filter)))
+
+The function 'beats' used there converts a beat length into a sample length.
+In this case, it would render 2.5 seconds worth of music.  
+
+In order to get different note lengths, individual notes on the track can be
+replaced with lists of notes.  Each list of notes is the same length, as a
+whole, as a note on its level.  The time, then, is split up evenly between its
+constituent notes.  For example
+
+    (deftrack foo [a (b c) (d e f) (g a (b c))])
+
+The first note 'a' has a length of one beat, while 'b' and 'c' are half a beat
+long each, 'd' 'e' and 'f' are 1/3rd of a beat long.  The last list has its
+own list inside of it, and it acts the same way.  In this case, 'g' and 'a'
+are both 1/3rd of a beat long, and 'b' and 'c' are each 1/6th of a beat.
+Lists can be nested arbitrarily.
+
+Tracks also support maps of options applied to them, which give information
+about their type and defaults.  These are applied to the name in the same way
+a track vector is:
+
+    (deftrack foo {:type [:note] :oct 5 :bpn 4} [a b c d e])
+
+The :type option takes a vector of types, meaning a track can have several
+types that work together in various ways.  [:note] is the default type,
+representing a note track.  :raw is also a valid type.  With raw, instead of
+converting note names to frequencies as expected, any values can be used as
+notes and will be passed as-is to the filter.  If you have a short list of
+long values, you can use :option as the type instead.  This type takes the
+attribute :opts, which is bound to a map.  The notes you use in the track are
+then used as keys in the map, and the resulting values are passed to the wave.
+
+The other keys there are :oct, which defines the starting octave (defaults to
+4) and :bpn, which defines the beats-per-note (defaults to 1).  These maps can
+be shared between tracks just like the vectors can, and they can be split up
+into multiple maps as well.  The total maps for each track will be merged
+together.
+
+Finally, as for the notes themselves, specific to the :note type of track,
+these are represented in a deterministic way.  They each must have a letter
+(a-g) representing the note, but can also have n/b/# attached to represent
+sharp, flat, or natural.  They can also have an octave number.  If an octave
+number doesn't exist, they just use the same octave as the previous note.
+The special symbols '.' and '*' represent rests and holds.  Rests produce
+silence generally, while holds just continue the last note as if it were the
+same note.  These can be used to create the equivalent of dotted half notes,
+etc.  
+
+
+CREATING WAVES:
+
+If you need to define your own particular filter using code instead of other
+filters, this can be done with the 'wave' operator.  'wave' takes a body of
+code and produces a wave.  The body of code takes the variable 's', which
+represents the current sample number, and should return an amplitude for that
+particular sample.  If other waves are provided to the wave, those waves'
+amplitudes can be gotten by calling them, i.e. (foo s).  This operator is
+typically used with deffilter:
+
+    (deffilter double [wav]
+      (wave
+        (* (wav s) 2)))
+
+This creates a filter double, which takes a wave and returns a wave that
+doubles its amplitude.  There are a few gotchas to doing this:
+
+First of all, any argument passed into deffilter will be coerced into a wave
+form, so even if you expect a filter to be called with a static number, if it
+CAN take a wave at all, you should call it.  If a number is passed in, the
+resultant wave will just always return that number.  This can be bypassed
+however, in situations where a wave can't be used, by wrapping the argument in
+deffilter's arglist with parens.  For example
+
+    (deffilter times [wav (num)]
+      (wave
+        (* (wav s) num)))
+
+In this case we don't have to call num, because since it is wrapped in parens,
+deffilter will leave it alone without coercing it to wave form.  Another thing
+to note is that waves must be called in order.  There is mutable caching going
+on behind the scenes and attempting to call a wave out of order will generally
+wreak havoc on the whole system, causing a render to fail in quiet and
+mysterious ways.
+
+
+

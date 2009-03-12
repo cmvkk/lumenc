@@ -1,9 +1,6 @@
 ;; demo.clj
 ;; copyright 2009 William D. Lipe (cmvkk)
 
-;; NOTE: None of this code works anymore, awaiting revision.
-;; look at icarus.clj for a working demo.
-
 (ns lumenc.demo
   (:refer-clojure)
   (:use lumenc.main)
@@ -12,28 +9,30 @@
   (:use lumenc.dws))
 
 ; an example of defining one track
-(deftrack unowen {:type :note}
+(deftrack unowen {:type [:note]}
   [ d       a      e         a     ]
   [ f       (g a)  g         b     ]
   [ (d5 a4) (e5 f) (e (f e)) (d c) ]
-  [ (a4 c5) (g4 a) f         h     ])
+  [ (a4 c5) (g4 a) f         *     ])
 
 
 ; an example of defining multiple tracks
 (deftrack
-  dm1 dm2 dm3 {:type :note :bpn 2 :oct 3}
+  dm1 dm2 dm3 {:type [:note] :bpn 2 :oct 3}
 
   dm1 [ (a c4)  e        (d g)  e        ]
-  dm2 [  r     (r c h h)  h    (h c h h) ]
-  dm3 [  r     (r   e  )  h    (h   e  ) ]
+  dm2 [  .     (. c * *)  *    (* c * *) ]
+  dm3 [  .     (.   e  )  *    (*   e  ) ]
 
   dm1 [ (d a)   e        b     c5        ]
-  dm2 [  h     (h e h h) b2    a         ]
-  dm3 [  h     (h   c  ) r     r         ])
+  dm2 [  *     (* e * *) b2    a         ]
+  dm3 [  *     (*   c  ) .     .         ])
 
 
 (deffilter guitar [(freq)]
-  (karplus-strong (white-noise freq) freq 0.98))
+  (if (= freq 0)
+    (constantly 0)
+    (karplus-strong (white-noise freq) freq 0.98)))
 
 
 (deffilter deep-mountain []
