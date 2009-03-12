@@ -203,23 +203,34 @@
   (and (vector? mtrk)
        (= (:track (first mtrk)) true)))
 
-(defmulti initial-pass (fn [trk] (:type (first trk))))
+(defmulti initial-pass (fn [trk typ] typ))
 
-(defn initial-p 
-  "Applies a default type to the track and calls initial-pass on it.  This is
-   run during deftrack."
+(defn initial-p
+  "Calls the initial pass method for each of the tracks types.  Also removes
+   a possible 'blank frame' from the beginning of the track, and assigns it a default
+   type if one doesn't already exist.  This is intended to be run during deftrack."
   [[mp & trk]]
-  (initial-pass (into [] (cons (if (:type mp) mp (assoc mp :type :note)) 
-			       (if (= (first trk) [\. 0 0]) (rest trk) trk)))))
+  (let [nmp (if (:type mp) mp (assoc mp :type [:note]))]
+    (loop [ntrk (cons mp (if (= (first trk) [\. 0 0]) (rest trk) trk)) 
+	   tvec (:type nmp)]
+      (if tvec
+	(recur (initial-pass ntrk (first tvec)) (next tvec))
+	ntrk))))
 
-(defmulti final-pass (fn [trk] (:type (first trk))))
+(defmulti final-pass (fn [trk typ] typ))
 
-(defn final-p 
-  "Changes beat values to sample values, and calls final-pass.  This is run
-   when the track is changed into a wave or during with-track."
-  [trk]
-  (map (fn [[num s e]]
-	 [num (beats s) (beats e)]) (next (final-pass trk))))
+
+(defn final-p
+  "Calls the final pass method for each of the tracks types.  Also converts beat lengths
+   to sample lengths, and removes the no-longer-necessary map from the beginning.  This
+   is intended to be run during with-track, or when passing a track to a filter."
+  [[mp & trk]]
+  (loop [ntrk (cons mp trk)
+	 tvec (:type mp)]
+    (if tvec
+      (recur (final-pass ntrk (first tvec)) (next tvec))
+      (map (fn [[num s e]]
+	     [num (beats s) (beats e)]) (next ntrk)))))
 
 
 (defn finalized-track-wave

@@ -54,22 +54,62 @@
 	(recur tail new-res new-oct)
 	new-res))))
 
-
-(defmethod initial-pass :note [[mp & trk]]
+(defmethod initial-pass :note [[mp & trk] t]
   (let [new-trk (get-notes trk mp)]
     (into [] (cons mp new-trk))))
 
-(defmethod final-pass :note [[mp & trk]]
+(defmethod final-pass :note [[mp & trk] t]
   (into [] (cons mp (map (fn [[note s e]]
 			   [(if (not= \. note)
 			      (*chromatic* note) 0) s e]) trk))))
 
-;; RAW TRACK
+;; ARPEGGIO TRACK
 
-(defmethod initial-pass :raw [trk]
+(defn get-arpeggio [note s e alen]
+  (let [asize (count note)]
+    (loop [cura 0
+	   left (- e s)
+	   sofar s
+	   res []]
+      (let [clen (min left alen)
+	    cnote (note cura)]
+	(if (> (- left clen) 0) ; still some time left
+	  (recur (mod (inc cura) asize)
+		 (- left clen)
+		 (+ sofar clen)
+		 (concat res [[cnote sofar (+ sofar clen)]]))
+	  (concat res [[cnote sofar (+ sofar clen)]]))))))
+
+(defmethod initial-pass :arpeggio [[mp & trk] t]
+  (let [alen (or (:alen mp) 1/10)]
+    (into [] (cons mp 
+		   (apply concat (map (fn [[note s e]]
+					(if (vector? note)
+					  (get-arpeggio note s e alen)
+					  [[note s e]])) trk))))))
+
+(defmethod final-pass :arpeggio [trk t]
   trk)
 
-(defmethod final-pass :raw [trk]
+
+;; OPTION TRACK
+
+(defmethod initial-pass :option [trk t]
+  trk)
+
+(defmethod final-pass :option [[mp & trk] t]
+  (let [omap (:opts mp)]
+    (into [] (cons mp (map (fn [[note s e]]
+			     [(omap note) s e]) trk)))))
+
+
+
+;; RAW TRACK
+
+(defmethod initial-pass :raw [trk t]
+  trk)
+
+(defmethod final-pass :raw [trk t]
   trk)
 
 
