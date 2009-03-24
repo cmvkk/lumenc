@@ -117,28 +117,30 @@
     (loop [waves []  ;list of waves
 	   rests []  ;gensyms that will refer to the waves
 	   fargs []  ;args for the fn that produces the lazy seq
+	   binds []  ;bindings for the let inside the lazy-seq
 	   inits []  ;initial values for the fn args (not including the waves)
 	   [arg & tail] args 
 	   inand false]
       (cond 
        (= arg :and) 
-       (recur waves rests fargs inits tail true)
+       (recur waves rests fargs binds inits tail true)
        
        (not inand) ; 'arg' is a wave
        (let [garg (gensym)
 	     nwaves (conj waves arg)
 	     nrests (conj rests garg)
-	     nfargs (conj fargs [arg ':as garg])]
+	     nbinds (concat binds [arg `(or (first ~garg) 0)])
+	     nfargs (conj fargs garg)]
 	 (if tail
-	   (recur nwaves nrests nfargs inits tail inand)
-	   [nwaves nrests nfargs inits]))
+	   (recur nwaves nrests nfargs nbinds inits tail inand)
+	   [nwaves nrests nfargs nbinds inits]))
        
        true  ; 'arg' and '(first tail)' are a loop-style binding
        (let [nfargs (conj fargs arg)
 	     ninits (conj inits (first tail))]
 	 (if (next tail)
-	   (recur waves rests nfargs ninits (next tail) inand)
-	   [waves rests nfargs ninits]))))))
+	   (recur waves rests nfargs binds ninits (next tail) inand)
+	   [waves rests nfargs binds ninits]))))))
 
 (defn wave-opts [waves]
   (map (fn [wav] `(cond 
@@ -151,7 +153,7 @@
 (defn expand-give [[give ret & args] rests myfn]
   (if (not (= give 'give))
     (throw Exception)
-    `(cons ~ret (~myfn ~@(map (fn [r] `(if (next ~r) (next ~r) (cons 0 (repeat 0)))) rests) ~@args))))
+    `(cons ~ret (~myfn ~@(map (fn [r] `(rest ~r)) rests) ~@args))))
 
 (defn find-give [body rests myfn]
   (if (not (seq? body))
@@ -161,11 +163,12 @@
       (map #(find-give % rests myfn) body))))
 
 (defmacro wave [args & body]
-  (let [[waves rests fargs inits] (parse-wave-args args)
+  (let [[waves rests fargs binds inits] (parse-wave-args args)
         myfn (gensym)]
     `(let [~myfn (fn ~myfn ~(into [] fargs)
                    (lazy-seq
-                     ~@(map #(find-give % rests myfn) body)))]
+		    (let ~(into [] binds)
+                     ~@(map #(find-give % rests myfn) body))))]
        (~myfn ~@(wave-opts waves) ~@inits))))
 
 (declare give)
@@ -206,10 +209,10 @@
     `(let ~(into [] (concat `(~atomlist (take ~len (repeatedly #(atom nil))))
 			     (apply concat (map (fn [i]
 						  `(~(nth forms (* i 2))
-						    (lazy-seq (cons 0 (deref (nth ~atomlist ~i))))))
+						    (lazy-seq (seq (deref (nth ~atomlist ~i))))))
 						(range len)))))
        ~@(map (fn [i]
-		`(reset! (nth ~atomlist ~i) (lazy-seq (seq ~(nth forms (inc (* i 2))))))) 
+		`(reset! (nth ~atomlist ~i) ~(nth forms (inc (* i 2))))) 
 	      (range len)))))
 
 		

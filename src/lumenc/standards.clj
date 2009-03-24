@@ -120,16 +120,17 @@
    (the return value will be calculated with linear interpolation), and size can be fractional
    but will be rounded up."
   [wav size dlen]
-  (let [size (int (Math/ceil size))]
-    (cons 0 (wave [wav dlen :and 
-                   hold (into [] (repeat size 0))
-		   s 0]
-	      (let [ns (- s (dec dlen))
-		    ntop (mod (int (Math/ceil ns)) size)
-		    nbot (mod (int (Math/floor ns)) size)
-		    res (interpolate (get hold nbot) (get hold ntop) (mod ns 1))]
+  (let [size (int (Math/ceil size))
+	wav (cons 0 wav)]
+    (wave [wav dlen :and 
+	   hold (into [] (repeat size 0))
+	   s 0]
+	  (let [ns (- s (dec dlen))
+		ntop (mod (int (Math/ceil ns)) size)
+		nbot (mod (int (Math/floor ns)) size)
+		res (interpolate (get hold nbot) (get hold ntop) (mod ns 1))]
 ;		(println "ntop" ntop "nbot" nbot "ns" ns "s" (mod (dec s) size))
-		(give res (assoc hold (mod s size) wav) (inc s))))))) 
+	    (give res (assoc hold (mod s size) wav) (inc s)))))) 
 
 
 
