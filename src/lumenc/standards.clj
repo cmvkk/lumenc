@@ -7,152 +7,138 @@
 
 ;; UTILITY FILTERS
 
-(deffilter pan 
+(deffilter impulse 
+  "Impulse filter.  Returns 1 for the first sample, 0 otherwise."
+  []
+  (lazy-seq (cons 1 (repeat 0))))
+
+(deffilter one 
+  "A filter that returns only 1.  Mostly for testing purposes."
+  []
+  (repeat 1))
+
+
+(deffilter pan
   "Returns a wave that goes from 'start'
-   to 'end' in 'len' samples."
-  [(start) (end) (len)]
-  (wave
-    (+ (* end   (/ s         len)) 
-       (* start (/ (- len s) len)))))
+  to 'end' in 'len' samples."
+  [start end len]
+  (wave [:and s 0]
+    (give (+ (* end   (/ s         len))
+             (* start (/ (- len s) len)))
+	  (inc s))))
 
 (deffilter exp-drop
   "Equals 1/(c^s) where c is coeff and s is samples.  The higher coeff, the
    sharper the drop. The values here are pretty small.  A coeff of 1.0002 will
    drop off in half a second."
-  [(coeff)]
-  (wave
-   (/ 1 (Math/pow coeff s))))
+  [coeff]
+  (wave [:and s 0]
+    (give (/ 1 (Math/pow coeff s)) 
+	  (inc s))))
+
+;(deffilter parallel
+;  "Causes the given wave's generation to be spun off
+;   into its own thread, making it concurrent.  Up to
+;   tsamps samples will be generated, after which the 
+;   wave will end."
+;  [wav]
+;  (seque 500 wav))
+
 
 (deffilter parallel
-  "Causes a the given wave's generation to be spun off
-   into its own thread, making it concurrent."
-  [wav (tsamps)]
-  (let [#^java.util.concurrent.LinkedBlockingQueue lbq (new java.util.concurrent.LinkedBlockingQueue)
-	 ag (agent nil)]
-     (.add lbq 0)
-     (send ag (fn [a]
-		(try
-		 (loop [s 0]
-		   (.add lbq (wav s))
-		   (when (< s tsamps)
-		     (recur (inc s))))
-		 (catch Exception e (.printStackTrace e)))))
-     (fn [s]
-       (.take lbq))))
+  [wav len]
+  (let [lbq (new java.util.concurrent.LinkedBlockingQueue)
+	a (agent wav)
+	len2 (int (+ len 3))
+	foo (fn [s]
+	      (loop [s s i 0]
+		(.put lbq (first s))
+		(if (and (next s) (< i len2))
+		  (recur (next s) (inc i))
+		  nil)))]
+    (send-off a foo)
+    (wave []
+      (give (.take lbq)))))
 
-(deffilter negate 
+
+
+;(deffilter parallel
+;  [wav]
+;  wav)
+
+(deffilter negate
   "Negates a wave, flips it upsidown over 0."
   [wav]
-  (wave
-   (- (wav s))))
+  (wave [wav]
+    (give (- wav))))
+
+(deffilter invert-gain
+  "Inverts an amplitude, so that louder is quieter."
+  [wav]
+  (wave [wav]
+   (give (- 1 wav))))
+
 
 (deffilter period 
   "Converts a wave returning frequencies to one returning
    period lengths."
   [freq]
-  (wave
-   (/ *rate* (freq s))))
+  (wave [freq]
+   (give (/ *rate* freq))))
 
 (deffilter cap 
   "'Caps' a wave after a certain time, returning only silence
    after that point."
-  [wav (len)]
-  (wave
+  [wav len]
+  (wave [wav :and s 0]
    (if (> s len)
-     0
-     (wav s))))
-
-(deffilter cache 
-  "Caches a wave's prior return values for len samples, allowing
-   the wave to be called with past values easily."
-  [wav (len)]
-  (cwave len
-    (wav s)))
-
-(deffilter express 
-  "Stores a wave's last calculated return value, which can then
-   be retrieved by calling the wave with the number -1.  This
-   is mostly intended for use inside the rstack operator, in order
-   to keep rdelay for inciting infinite recursion."
-  [wav]
-  (let [last (atom 0)]
-    (wave
-     (if (= s -1)
-       @last
-       (swap! last (fn [_] (wav s)))))))
-
-(deffilter neg-safe 
-  "When the wave is called with a negative sample number, returns
-   0 instead of nil, which will keep the program from throwing
-   an exception.  Don't use with 'express'."
-  [wav]
-  (wave
-   (if (< s 0)
-     0
-     (wav s))))
+     (give 0 s)
+     (give wav (inc s)))))
 
 ;; DELAYS
 
-(deffilter shift 
+(deffilter shift
   "'Shifts' a wave forward or backward in time.  A positive len
-   will delay the wave for that len samples, while a negative len
+   will delay the wave for len samples, while a negative len
    will crop the front of the wave for len samples.  This is done
-   in a cache-less manner, so it's safe to use with very large values
-   of len without worrying about memory.  However, len must be a whole
-   number."
-  [wav (len)]
-  (wave
-   (if (< (- s len) 0)
-     0
-     (wav (- s len)))))
+   in a cache-less manner, so it's safe to use with very large
+   values of len without worrying about memory.  However, len
+   must be a whole number."
+  [wav len]
+  (cond
+    (zero? len) wav
+    (pos? len) (concat (repeat len 0) wav)
+    (neg? len) (drop (- len) wav)))
 
-(deffilter buffer 
-  "Delays a wave for len samples.  Size is the 'maximum delay' the buffer
-   will be capable of, allowing it to define a static cache size.  len
-   however can be a wave, allowing for shifts in delay length over time, 
-   as long as len never exceeds size.  The delay is accomplished using an
-   internal cache, so for large delays it might be better to use 'shift'.  
-   Len can also be fractional, and size can be fractional but will be rounded
-   up."
-  [wav (size) len]
-  (let [hold (atom (into [] (take size (repeat 0))))]
-    (wave
-     (let [new (if (< s 1) 0 (wav (dec s)))
-	   ns (mod (- s (dec (len s))) size)
-	   res (if (< s (len s)) 
-		 0 (with-fraction #(get @hold (mod % size)) ns))]
-       (swap! hold assoc (int (mod s size)) new)
-       res))))
+(defn interpolate [low high frac]
+  (+ (* frac low) (* (- 1 frac) high)))
 
-(deffilter rdelay
-  "Like buffer, creates a delay using an internal cache.  It takes exactly
-   the same inputs as buffer and behaves exactly the same way, except that
-   it can only be used inside an rstack, in situations where its output
-   is fed back into its input.  If used outside of an rstack, it
-   will return only silence (probably).  Similarly, if buffer is used inside
-   an rstack, it will probably cause a StackOverflowError."
-  [wav (size) len]
-  (let [hold (atom (into [] (take size (repeat 0))))]  ; ring buffer for delayed data
-    (wave
-     (let [new (if (< s 1) 0 (wav (dec s))) ; grab new sample 
-	   ns (mod (- s (dec (len s))) size) ;calculate position of delayed sample in the buffer
-	   res (if (< s (len s))
-		 0 (with-fraction #(get @hold (mod % size)) ns))] ;uses linear interpolation to get sample
-       (swap! hold assoc (int (mod s size)) new) ;add new sample to buffer
-       res)))) ; return old sample
+(deffilter buffer
+  "Delays a wave for dlen samples.  Size is the 'maximum delay' the buffer
+   will be capable of.  dlen can be a track or wave, allowing for shifts in delay
+   length over time, as long as they don't exceed size.  dlen can also be fractional
+   (the return value will be calculated with linear interpolation), and size can be fractional
+   but will be rounded up."
+  [wav size dlen]
+  (let [size (int (Math/ceil size))]
+    (cons 0 (wave [wav dlen :and 
+                   hold (into [] (repeat size 0))
+		   s 0]
+	      (let [ns (- s (dec dlen))
+		    ntop (mod (int (Math/ceil ns)) size)
+		    nbot (mod (int (Math/floor ns)) size)
+		    res (interpolate (get hold nbot) (get hold ntop) (mod ns 1))]
+;		(println "ntop" ntop "nbot" nbot "ns" ns "s" (mod (dec s) size))
+		(give res (assoc hold (mod s size) wav) (inc s))))))) 
 
 
-(deffilter white-noise 
-  "Returns random data, cached to make it deterministic.  Freq indicates the rate
-   at which the data will be repeated, use nil for data that never repeats."
-  [(freq)]
-  (let [nfreq (if (= freq 0) 1 freq)
-	random (new java.util.Random)
-	size (int (Math/ceil (/ *rate* nfreq)))]
-    (cwave size
-     (if (< s size)
-       (unchecked-divide (.nextInt random) 256) ; 4 to 3 bytes
-       (prev (mod s size))))))
+
+(deffilter white-noise
+  "Returns random data."
+  []
+  (let [random (new java.util.Random)]
+    (wave []
+      (give (unchecked-divide (.nextInt random) 64)))))
 
 ;; VOLUME FILTERS
 
@@ -160,34 +146,30 @@
   "Returns a wave multiplied by a certain gain.  The gain can be a wave,
    allowing for gain changes over time."
   [wav mul]
-  (wave
-    (int (* (wav s) (mul s)))))
+  (wave [wav mul]
+    (give (* wav mul))))
 
 (deffilter fade 
   "Returns a wave that fades to 0 in amplitude over the course of len samples."
-  [wav (len)]
+  [wav len]
   (stack
     p (pan 1 0 len)
     (gain wav p)))
 
 (deffilter pluck-envelope
   "A volume envelope with an exponential drop, like a plucked string would have."
-  [wav (coeff)]
+  [wav coeff]
   (gain wav (exp-drop coeff)))
 
 
 ;; EFFECT FILTERS
 
 (deffilter simple-lowpass
-  "Defines a simple lowpass filter, which works by averaging the current sample
-   against an average of itself and the previous sample."
   [wav]
-  (wave
-   (let [cursamp (int (wav s))
-	 prevsamp (int (hold))]
-     (unchecked-add
-       (unchecked-add (unchecked-divide cursamp 4) (unchecked-divide prevsamp 4))
-       (unchecked-divide cursamp 2)))))
+  (wave [wav :and last 0]
+    (let [res (/ (+ (/ (+ last wav) 2)
+		    wav) 2)]
+      (give res res))))
 
 (deffilter feed-forward 
   "A simple feed-forward comb filter, representing a single echo. Takes either a fixed
@@ -197,9 +179,9 @@
      |----------------(g)-----|
      |                        v
    [wav]-->[fdelay]--(dg)-->[add]-->"
-  ([wav (del) g dg]
+  ([wav del g dg]
      (feed-forward wav del del g dg))
-  ([wav (max-del) del g dg]
+  ([wav max-del del g dg]
      (add 
       (gain wav g)
       (gain (buffer wav max-del del) dg))))
@@ -214,11 +196,11 @@
    [wav]-->[res]----->[line]
              ^          |
              |---(dg)---|         "
-  ([wav (del) g dg]
+  ([wav del g dg]
       (feed-back wav del del g dg))
-   ([wav (max-del) del g dg]
+   ([wav max-del del g dg]
      (rstack
-      line (rdelay res max-del del)
+      line (buffer res max-del del)
       res (add wav (gain line dg))
       out (gain res g))))
 
@@ -232,10 +214,10 @@
    [wav]-->[front]-->[line]-->[back]-->
               ^        |
               |--(-g)--|                 "
-  ([wav (del) g]
+  ([wav del g]
      (all-pass wav del del g))
-  ([wav (max-del) del g]
+  ([wav max-del del g]
      (rstack
       front (add wav (gain line (negate g)))
-      line (rdelay front max-del del)
+      line (buffer front max-del del)
       back (add line (gain front g)))))

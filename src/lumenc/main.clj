@@ -71,20 +71,28 @@
 	      (.put (.getBytes "data"))
 	      (.putInt csize)))))                              ;chunk size
 
-(defn write-data 
-  "Helper function to render, it writes wave data to a given file output stream."
-  [bos form fstart fend]
-  (let [chunk-size (int (Math/ceil (/ (- fend fstart) *num-chunks*)))
+
+(defn write-chunks
+  [#^java.io.BufferedOutputStream bos #^java.nio.ByteBuffer bb form end chunk-size]
+  (let [csize (min chunk-size end)
+	rform (loop [nf form cs csize]
+		(.putInt bb (int (unchecked-multiply (int (first nf)) 64)))
+		(if (> cs 1)
+		  (recur (next nf) (dec cs))
+		  (next nf)))]
+    (.write bos (.array bb) 0 (* 4 chunk-size))
+    (.position bb 0)
+    (print "=") (flush)
+    (when (> (- end csize) 0)
+      (recur bos bb rform (- end csize) chunk-size))))
+
+(defn write-data
+  [bos form start end]
+  (let [chunk-size (int (Math/ceil (/ (- end start) *num-chunks*)))
 	bb (java.nio.ByteBuffer/allocate (* 4 chunk-size))]
     (.order bb java.nio.ByteOrder/LITTLE_ENDIAN)
-    (loop [cur-chunk 0 start 0 end (min chunk-size fend)]
-      (doseq [cur (range start end)]
-	(.putInt bb (int (unchecked-multiply (int (form cur)) 64))))
-      (.write bos (.array bb) 0 (* 4 chunk-size))
-      (.position bb 0)
-      (when (< cur-chunk *num-chunks*)
-	(recur (inc cur-chunk) (+ start chunk-size) (min (+ end chunk-size) fend))))))
-
+    (write-chunks bos bb form end chunk-size)))
+  
 (defn render
   "Renders a wave into an actual .wav file."
   [[path end] form]
@@ -92,6 +100,7 @@
         fos (new java.io.FileOutputStream file)
         bos (new java.io.BufferedOutputStream fos)]
     (println "Writing" end "samples to" file)
+    (println "----|----|----|----|----|")
     (.write bos (get-header 0 end) 0 44)
     (write-data bos form 0 end)
     (.flush bos)
@@ -99,55 +108,67 @@
 
 ;; OPERATORS
 
-(defmacro wave
-  "Creates a wave.  Takes a body of clojure code, and the variable s is provided, referring
-   to the current sample number."
-  [& forms]
-  `(let [~'prev-sample (atom [-1 0])]
-     (fn [~'s]
-       (let [[sn# vl#] (deref ~'prev-sample)]
-	 (if (= ~'s sn#)
-	   vl#
-	   (let [res# (do ~@forms)]
-	     (swap! ~'prev-sample (constantly [~'s res#]))
-	     res#))))))
+(declare track?)
+(declare track-wave)
 
-(defmacro cwave
-  "Returns a 'cached wave'.  Works exactly like a normal wave, with a few exceptions.
-   The first form in the body must be either a number or nil.  This number determines
-   how many previous samples the wave will store.  If nil is given, the wave will cache
-   everything.  The number can be a decimal, but will be rounded up to the nearest integer.
-   The cached values of the wave are available in the wave itself via the 'prev' function, 
-   for example (prev (dec s)) will return the immediately previous return value."
-  [num & forms]
-  `(let [cache# (ref [])
-	 next# (ref 0)]
-     (if ~num
-       (let [num# (int (Math/ceil ~num))]
-	 (fn ~'prev [s#]
-	   (if (and (< s# (deref next#)) (>= s# (- (deref next#) num#))) ;if result is cached
-	     (get (deref cache#) (mod s# num#))
-	     (let [~'s s#
-		   new# (do ~@forms)]
-	       (when (= (deref next#) s#)
-		 (dosync
-		  (when (= (deref next#) s#)
-		    (alter cache# assoc (int (mod s# num#)) new#)
-		    (alter next# inc))))
-	       new#))))
+(defn parse-wave-args [args]
+  (if (empty? args)
+    [[] [] [] []]
+    (loop [waves []  ;list of waves
+	   rests []  ;gensyms that will refer to the waves
+	   fargs []  ;args for the fn that produces the lazy seq
+	   inits []  ;initial values for the fn args (not including the waves)
+	   [arg & tail] args 
+	   inand false]
+      (cond 
+       (= arg :and) 
+       (recur waves rests fargs inits tail true)
+       
+       (not inand) ; 'arg' is a wave
+       (let [garg (gensym)
+	     nwaves (conj waves arg)
+	     nrests (conj rests garg)
+	     nfargs (conj fargs [arg ':as garg])]
+	 (if tail
+	   (recur nwaves nrests nfargs inits tail inand)
+	   [nwaves nrests nfargs inits]))
+       
+       true  ; 'arg' and '(first tail)' are a loop-style binding
+       (let [nfargs (conj fargs arg)
+	     ninits (conj inits (first tail))]
+	 (if (next tail)
+	   (recur waves rests nfargs ninits (next tail) inand)
+	   [waves rests nfargs ninits]))))))
 
-       (fn ~'prev [s#]
-	 (if (< s# (deref next#))
-	   (get (deref cache#) s#)
-	   (let [~'s s#
-		 new# (do ~@forms)]
-	     (when (= (deref next#) s#)
-	       (dosync
-		(when (= (deref next#) s#)
-		  (alter cache# conj new#)
-		  (alter next# inc))))
-	     new#))))))
+(defn wave-opts [waves]
+  (map (fn [wav] `(cond 
+                    (seq? ~wav) ~wav
+                    (track? ~wav) (track-wave ~wav)
+		    (instance? clojure.lang.Atom ~wav) (lazy-seq (seq (deref ~wav)))
+                    true (repeat ~wav)))
+       waves))
 
+(defn expand-give [[give ret & args] rests myfn]
+  (if (not (= give 'give))
+    (throw Exception)
+    `(cons ~ret (~myfn ~@(map (fn [r] `(if (next ~r) (next ~r) (cons 0 (repeat 0)))) rests) ~@args))))
+
+(defn find-give [body rests myfn]
+  (if (not (seq? body))
+    body
+    (if (= (first body) 'give)
+      (expand-give body rests myfn)
+      (map #(find-give % rests myfn) body))))
+
+(defmacro wave [args & body]
+  (let [[waves rests fargs inits] (parse-wave-args args)
+        myfn (gensym)]
+    `(let [~myfn (fn ~myfn ~(into [] fargs)
+                   (lazy-seq
+                     ~@(map #(find-give % rests myfn) body)))]
+       (~myfn ~@(wave-opts waves) ~@inits))))
+
+(declare give)
 
 (defmacro stack
   "Takes a series of label/filter pairs, binding the return value of each filter to the corresponding
@@ -164,39 +185,34 @@
   (let [size (count forms)
         gens (take size (repeatedly gensym))]
     `(let ~(into [] (apply concat (map vector gens forms)))
-       (wave
-         (int (/ (+ ~@(map (fn [x] `(~x ~'s)) gens)) ~size))))))
+       (wave ~(into [] gens)
+         (~'give (int (/ (+ ~@gens) ~size)))))))
 
 (defmacro add
-  "Takes a series of waves and adds them together.  Beware, the returned
-   wave may have a far greater amplitude range than the waves passed to it."
+  "Takes a series of waves and adds them together.  Beware of
+   arithmetic overflow."
   [& forms]
   (let [size (count forms)
-        gens (take size (repeatedly gensym))]
+	gens (take size (repeatedly gensym))]
     `(let ~(into [] (apply concat (map vector gens forms)))
-       (wave
-         (int (+ ~@(map (fn [x] `(~x ~'s)) gens)))))))
+       (wave ~(into [] gens)
+	 (~'give (int (+ ~@gens)))))))
 
-(defmacro rstack 
-  "Like stack, takes a series of label/filter pairs, and binds each wave to the return
-   value of its corresponding filter.  Unlike stack, any filter call can refer to any other
-   labels in the series as arguments, allowing for mutual recursion.  Beware, this has a high
-   potential for causing an infinite loop and blowing the stack.  In particular, remember to use
-   the rdelay filter here rather than buffer or shift, and make sure every constituent filter is 
-   called at least once without going through your delay, otherwise the result will fail in quiet 
-   and mysterious ways."
+(defmacro rstack
+  "Add this"
   [& forms]
   (let [len (/ (count forms) 2)
 	atomlist (gensym)]
-    `(let ~(into []  (concat `(~atomlist (map (fn [x#] (atom nil)) (range ~len)))
-		              (apply concat (map (fn [i] 
-						   `(~(nth forms (* i 2)) 
-						     (fn [~'s] ((deref (nth ~atomlist ~i)) ~'s))))
-						 (range len)))))
-    ~@(map (fn [i] 
-	    `(swap! (nth ~atomlist ~i) (fn [x#] ~(nth forms (inc (* i 2)))))) 
-	   (range len)))))
+    `(let ~(into [] (concat `(~atomlist (take ~len (repeatedly #(atom nil))))
+			     (apply concat (map (fn [i]
+						  `(~(nth forms (* i 2))
+						    (lazy-seq (cons 0 (deref (nth ~atomlist ~i))))))
+						(range len)))))
+       ~@(map (fn [i]
+		`(reset! (nth ~atomlist ~i) (lazy-seq (seq ~(nth forms (inc (* i 2))))))) 
+	      (range len)))))
 
+		
 (defn track? 
   "Returns true if object is a track."
   [mtrk]
@@ -234,69 +250,25 @@
 
 
 (defn finalized-track-wave
-  "Takes an already finalized track and returns a wave that modulates based on its value."
   [ftrk]
-  (wave
-   (loop [[[val start end] & tail] ftrk]
-     (if (and (>= s start) (<= s end))
-       val
-       (if tail
-	 (recur tail)
-	 0)))))
+  (wave [:and ctrk ftrk s 0]
+    (loop [[[val start end] & tail :as ctrk] ctrk]
+      (if (and (>= s start) (<= s end))
+	(give val ctrk (inc s))
+	(if tail
+	  (recur tail)
+	  (give 0 [[0 0 0]] s))))))
+
 
 (defn track-wave
   "Takes a track and returns a wave that modulates based on its value."
   [trk]
   (finalized-track-wave (final-p trk)))
 
-;; DEFFILTER
 
-(defn get-filter-args
-  "Helper function for deffilter.  Determines the arglist and the list of let bindings
-   for the expanded defn."
-  [args arglist letlist]
-  (let [[arg & tail] args
-	new-arglist (conj arglist (if (list? arg) (first arg) arg))
-	new-letlist (if (list? arg)
-		      letlist
-		      (concat letlist `(~arg (if (fn? ~arg) 
-					       ~arg 
-					       (if (track? ~arg)
-						 (track-wave ~arg)
-						 (constantly ~arg))))))]
-    (if tail
-      (recur tail new-arglist           new-letlist)
-      [(into []   new-arglist) (into [] new-letlist)] ))) 
+(defmacro deffilter [& stuff]
+  `(defn ~@stuff))
 
-(defn get-filter-body
-  "Helpfer function for deffilter.  Takes an arglist and a set of forms and returns an
-   expanded version with the appropriate let bindings."
-  [args & forms]
-  (let [[arglist letlist] (if (first args) (get-filter-args args [] []) [args args])]
-    `(~arglist
-      (let ~letlist
-	~@forms))))
-
-(defn get-filter-stuff
-  "Helpfer function for deffilter.  Takes the 'body' of the filter (including the docstring)
-   and returns an expanded version."
-  [thing & stuff]
-  (if (string? thing)
-    `(~thing ~@(apply get-filter-stuff stuff))
-    (if (list? thing)
-      (if stuff
-	`(~(apply get-filter-body thing) ~@(apply get-filter-stuff stuff))
-	`(~(apply get-filter-body thing)))
-      (get-filter-body thing (first stuff)))))
-
-(defmacro deffilter
-  "Defines a filter.  Works exactly like defn, with the caveat that arguments are somewhat 
-   tampered with.  Namely, any argument passed to deffilter that isn't already a wave will
-   be turned into one (by wrapping it in a call to constantly).  However 'static' arguments
-   can be defined by wrapping the arg in a list.  For example, (deffilter foo [bar (baz)] ...)
-   will turn bar into a wave if it isn't already one, but leave baz alone."
-  [name & stuff]
-  `(defn ~name ~@(apply get-filter-stuff stuff)))
 
 ;; DEFTRACK
 
@@ -419,17 +391,24 @@
 	  (recur tail seconds (concat res [[(apply func (cons val firsts)) start end]]))
 	  (into [] (concat res [[(apply func (cons val firsts)) start end]])))))))
 
-(defn with-track-fn 
-  "Helper function for with-track.  See with-track."
-  [trks func] 
+;(defn with-track-fn 
+;  "Helper function for with-track.  See with-track."
+;  [trks func] 
+;  (let [ntrk (get-total-track (map final-p trks) func)]
+;    (wave [:and ctrk ntrk s 0 cwav ]
+;     (loop [[[wav start end] & tail :as ctrk] ctrk]
+;       (if (and (>= s start) (<= s end))
+;	 (give wav ctrk (inc s))
+;	 (if tail
+;	   (recur tail)
+;	   (give 0 [[0 0 0]] s)))))))
+
+(defn with-track-fn
+  [trks func]
   (let [ntrk (get-total-track (map final-p trks) func)]
-    (wave
-     (loop [[[wav start end] & tail] ntrk]
-       (if (and (>= s start) (<= s end))
-	 (wav (- s start))
-	 (if tail
-	   (recur tail)
-	   0))))))
+    (mapcat (fn [[wav start end]]
+	      (take (- end start) wav))
+	    ntrk)))
 
 (defmacro with-track 
   "The with-track form.  Takes a vector of Vars (bound to tracks) and

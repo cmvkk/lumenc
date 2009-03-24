@@ -20,11 +20,13 @@
                ^               |
                |--[decay]<-----|    "
   ([seed freq g]
-     (karplus-strong seed (secs 0.1) freq g))
-  ([seed (len) freq g]
-     (let [first-per (/ *rate* (freq 0))]
+     (karplus-strong seed (secs 1) freq g))
+  ([seed len freq g]
+     (let [first-per (/ *rate* freq)]
        (rstack
 	pick  (cap seed first-per)
 	decay (simple-lowpass line)
-	line  (rdelay res len (period freq))
-	res   (gain (add pick decay) g)))))
+	line  (buffer res len (period freq))
+	foo   (add pick decay)
+	res   (gain foo g)))))
+

@@ -7,27 +7,24 @@
   (:use lumenc.standards))
 
 
-(deffilter stretch 
-  "Changes the bounds on a wav from *max-amp* to
+(deffilter stretch
+  "Changes the bounds on a wav from *max-amp* to 
    from top to bottom."
-  [wav (top) (bottom)]
+  [wav top bottom]
   (let [mid (/ (+ top bottom) 2)
 	mult (/ (/ (- top bottom) 2) *max-amp*)]
-  (wave
-   (+ mid (* mult (wav s))))))
-
-
+    (wave [wav]
+      (give (+ mid (* mult wav))))))
 
 (deffilter psine 
   "A sine wave, with changeable frequency and phase."
   [freq phase]
-  (let [lastrad (atom 0)
-	rad (/ (* 2 Math/PI) *rate*)]
-    (wave
-     (let [radjump (* rad (freq s))
-	   newrad (+ @lastrad radjump)]
-       (swap! lastrad (fn [x] newrad))
-       (* *max-amp* (Math/sin (+ newrad (phase s))))))))
+  (let [rad (/ (* 2 Math/PI) *rate*)]
+    (wave [freq phase :and lastrad 0]
+     (let [radjump (* rad freq)
+	   newrad (+ lastrad radjump)]
+       (give (* *max-amp* (Math/sin (+ newrad phase)))
+	     newrad)))))
 
 (deffilter sine 
   "A sine wave with changeable frequency."
@@ -39,14 +36,13 @@
 (deffilter ppulse 
   "A pulse wave with changeable frequency, duty, and phase."
   [freq duty phase]
-  (let [lastpos (atom 0)
-	step (/ 1 *rate*)]
-    (wave
-     (let [sjump (* step (freq s))
-	   newpos (+ @lastpos sjump)]
-       (swap! lastpos (fn [x] newpos))
-       (if (< (mod (+ (phase s) newpos) 1) (duty s))
-	 *max-amp* (- *max-amp*))))))
+  (let [step (/ 1 *rate*)]
+    (wave [freq duty phase :and lastpos 0]
+     (let [sjump (* step freq)
+	   newpos (+ lastpos sjump)]
+       (give (if (< (mod (+ phase newpos) 1) duty)
+	       *max-amp* (- *max-amp*))
+	     newpos)))))
 
 (deffilter pulse 
   "A pulse wave with changeable frequency and duty."
@@ -68,18 +64,18 @@
 (deffilter ptriangle 
   "A triangle wave with changeable frequency, duty, and phase."
   [freq duty phase]
-  (let [lastpos (atom 0)
-	step (/ 1 *rate*)
+  (let [step (/ 1 *rate*)
 	range (* 2 *max-amp*)]
-    (wave
-     (let [sjump (* step (freq s))
-	   newpos (+ @lastpos sjump)
-	   cpos (mod (+ newpos (phase s)) 1)
-	   cd (duty s)]
-       (swap! lastpos (fn [x] newpos))
-       (if (< cpos cd)
-	 (- (/ (*    cpos        range)       cd)  *max-amp*)
-	 (+ (/ (* (- cpos cd) (- range)) (- 1 cd)) *max-amp*))))))
+    (wave [freq duty phase :and lastpos 0]
+     (let [sjump (* step freq)
+	   newpos (+ lastpos sjump)
+	   cpos (mod (+ newpos phase) 1)]
+       (give (if (< cpos duty)
+	       (- (/ (*    cpos          range)       duty)  *max-amp*)
+	       (+ (/ (* (- cpos duty) (- range)) (- 1 duty)) *max-amp*))
+	     newpos)))))
+
+
 
 (deffilter triangle 
   "A triangle wave with changeable frequency and duty."
