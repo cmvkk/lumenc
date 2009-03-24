@@ -27,6 +27,6 @@
 	pick  (cap seed first-per)
 	decay (simple-lowpass line)
 	line  (buffer res len (period freq))
-	foo   (add pick decay)
-	res   (gain foo g)))))
+	a     (add pick decay)
+	res   (gain a g)))))
 
