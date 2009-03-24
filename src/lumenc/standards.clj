@@ -168,8 +168,8 @@
 (deffilter simple-lowpass
   [wav]
   (wave [wav :and last 0]
-    (let [res (/ (+ (/ (+ last wav) 2)
-		    wav) 2)]
+    (let [res (unchecked-divide (unchecked-add (unchecked-divide (unchecked-add (int last) (int wav)) 2)
+		   (int wav)) 2)]
       (give res res))))
 
 (deffilter feed-forward 
