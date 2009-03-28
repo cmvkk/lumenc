@@ -211,7 +211,6 @@
   [& stuff]
   `(defn ~@stuff))
 
-
 (defmacro stack
   "Takes a series of label/filter pairs, binding the return value of each filter to the corresponding
    label in order, just as let would do, and returning the value of the bottom filter.  The final 
@@ -220,25 +219,6 @@
   (if (even? (count forms))
     `(let [~@forms] ~(last (butlast forms)))
     `(let [~@(butlast forms)] ~(last forms))))
-
-(defmacro mix
-  "Takes a series of waves and averages them together."
-  [& forms]
-  (let [size (count forms)
-        gens (take size (repeatedly gensym))]
-    `(let ~(into [] (apply concat (map vector gens forms)))
-       (wave ~(into [] gens)
-         (~'give (int (/ (+ ~@gens) ~size)))))))
-
-(defmacro add
-  "Takes a series of waves and adds them together.  Beware of
-   arithmetic overflow."
-  [& forms]
-  (let [size (count forms)
-	gens (take size (repeatedly gensym))]
-    `(let ~(into [] (apply concat (map vector gens forms)))
-       (wave ~(into [] gens)
-	 (~'give (int (+ ~@gens)))))))
 
 (defmacro rstack
   "Takes a series of let-like bindings, with a symbol paired to a form that returns a wave.

@@ -95,6 +95,8 @@
      (give 0 s)
      (give wav (inc s)))))
 
+
+
 ;; DELAYS
 
 (deffilter shift
@@ -161,6 +163,47 @@
   "A volume envelope with an exponential drop, like a plucked string would have."
   [wav coeff]
   (gain wav (exp-drop coeff)))
+
+;; MIXING
+
+(deffilter add
+  "Adds any number of waveforms together."
+  ([one] one)
+  ([one two]
+     (wave [one two]
+	(give (+ one two))))
+  ([one two three]
+     (wave [one two three]
+	(give (+ one two three))))
+  ([one two three four]
+     (wave [one two three four]
+	(give (+ one two three four))))
+  ([one two three four five]
+     (wave [one two three four five]
+	(give (+ one two three four five))))
+  ([one two three four five & more]
+     (add (add one two three four five)
+	  (apply add more))))
+
+(deffilter mix
+  "Averages any number of waveforms together."
+  ([one] one)
+  ([one two]
+     (wave [one two]
+       (give (/ (+ one two) 2))))
+  ([one two three]
+     (wave [one two three]
+       (give (/ (+ one two three) 3))))
+  ([one two three four]
+     (wave [one two three four]
+       (give (/ (+ one two three four) 4))))
+  ([one two three four five]
+     (wave [one two three four five]
+       (give (/ (+ one two three four five) 5))))
+  ([one two three four five & more]
+     (gain (/ 1 (+ (count more) 5))
+	   (add (add one two three four five)
+		(apply add more)))))
 
 
 ;; EFFECT FILTERS
