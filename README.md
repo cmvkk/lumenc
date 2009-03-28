@@ -30,7 +30,7 @@ Waves are generally created by calling filters, which are just functions that re
 
 Waves can be written out to file using the `render` macro.  For example `(render ["out.wav" (secs 10)] (sine 440))` writes ten seconds of a 440Hz sine wave out to the file "out.wav" in the directory where you ran the script.
 
-### The `wave` Macro
+### The wave Macro
 
 This macro allows you to define a 'primitive' wave, using clojure code.  It takes an argument list like `[xs :and bindings]` where xs are any number of input waves, and bindings are bindings of anything.  Inside the body, the waves will evaluate to the 'current sample' of that wave.  You can then return the sample value for your wave with the form `(give ret-val rebindings)` where ret-val is the value for that sample, and rebindings are new bindings for the next sample.  A wave that halves the amplitude of an input wave might look like this: `(wave [input] (give (/ input 2)))`.  
 
@@ -44,7 +44,12 @@ Filters are basically just functions, and you can define them as such.  The macr
 
 ### Tracks
 
-Tracks are representations of a modulating value over time.  They're generally used to represent melodies, drum beats, varying volumes, etc.  They're created using `deftrack`, for example `(deftrack foo [c d e f g a b c])` which creates a track 'foo' that represents a C major scale.  When a track is passed to a filter that expects a wave, that track will be coerced into wave form.  For example, `(sine foo)` would produce a sine wave playing the C major scale. 
+Tracks are representations of a modulating value over time.  They're generally used to represent melodies, drum beats, varying volumes, etc.  They're created using `deftrack`, for example `(deftrack foo [c d e f g a b c])` which creates a track 'foo' that represents a C major scale.  When a track is passed to a filter that expects a wave, that track will be coerced into wave form.  For example, `(sine foo)` would produce a sine wave playing the C major scale.
+
+### The with-track Macro
+
+This macro represents another way to use tracks inside waves.  It takes a vector containing one or more track labels, and a body which uses those labels and returns a wave.  The body will be applied for each track, however it will restart each time the first track's value changes.  As a result, it allows tracks to be safely used with filters that don't necessarily take a wave argument, as well as with instruments that have an amplitude envelope that needs to be restarted with each note.  For example, `(with-track [foo] (fade (sine 440) (beats 1/4)))` will produce a C major scale, played by a sine wave that fades out over the course of 1/4th of a beat.  If the track foo were passed directly to sine, the resultant wave would fade out to silence long before the scale was finished.  But in this case, the sine wave restarts at full amplitude for each note.
+
 
 ### Deftrack
 
@@ -60,7 +65,7 @@ The default track type is :note.  This type automatically takes note symbols and
 
 ### Other track types
 
-As seen earlier, :raw tracks simply return the values in the track without changing them at all.  Tracks of type :option have an attribute :opts, which takes a map.  The keys of this map are then used in the track itself, and those keys are then converted to the map's corresponding values when the track is processed.  This is useful if you want to modulate between a small number of large values.   :arpeggio tracks allow vectors of values, transforming those vectors into arpeggios of the values inside.  They take an option :alen which represents the beat length of each note inside the arpeggio.  
+As seen earlier, `:raw` tracks simply return the values in the track without changing them at all.  Tracks of type `:option` have an attribute `:opts`, which takes a map.  The keys of this map are then used in the track itself, and those keys are then converted to the map's corresponding values when the track is processed.  This is useful if you want to modulate between a small number of large values.   `:arpeggio` tracks allow vectors of values, transforming those vectors into arpeggios of the values inside.  They take an option `:alen` which represents the beat length of each note inside the arpeggio.  
 
 ### Creating track types
 
