@@ -118,7 +118,7 @@
 	   real-nsps# (/ ttime# end#)
 	   want-nsps# (/ 1000000000 *rate*)
 	   rat# (/ want-nsps# real-nsps#)]
-       (printf "In %.2f seconds (%.2fx real time)." (/ ttime# 1000000000.0) (float rat#))
+       (printf "\nIn %.2f seconds (%.2fx real time)." (/ ttime# 1000000000.0) (float rat#))
        (println "\n"))
      (.flush bos#)
      (.close bos#)))
@@ -166,9 +166,8 @@
   "Expands the code that coerces various input values of 'wave' into lazy-seq form."
   [waves]
   (map (fn [wav] `(cond 
+		    (track? ~wav) (track-wave ~wav) 
                     (seq? ~wav) ~wav
-                    (track? ~wav) (track-wave ~wav)
-		    (instance? clojure.lang.Atom ~wav) (lazy-seq (seq (deref ~wav)))
                     true (repeat ~wav)))
        waves))
 
@@ -272,7 +271,6 @@
   [trk]
   (loop [types (:type ((first trk) 2))
 	 ctrk trk]
-    (println "Inside initial-p loop, first types is" (first types))
     (if types
       (recur (next types) (initial-pass ctrk (first types)))
       ctrk)))
@@ -287,7 +285,7 @@
    changes beat lengths to samples.  Intended to be run just before the track is used in a wave."
   [trk]
   (map (fn [[val len mp :as frame]]
-	 (loop [types (:types mp)
+	 (loop [types (:type mp)
 		cf frame]
 	   (if types
 	     (recur (next types) (final-pass cf (first types)))
@@ -307,7 +305,9 @@
 	  (loop [[[nval nlen nmp] :as nseq] (next tseq)
 		 tlen len]
 	    (if (= nval '*)
-	      (recur (rest nseq) (+ tlen nlen))
+	      (if (next nseq)
+		(recur (rest nseq) (+ tlen nlen))
+		(cons [val (+ tlen len) mp] nil))
 	      (cons [val tlen mp] (collapse-holds nseq)))))))))
 
 (defn flatten-track
@@ -317,7 +317,6 @@
      (flatten-track tmap tvec nil))
   ([tmap tvec len]
      (let [len (or len (:bpn tmap) 1)]
-       (println "inside flatten-track")
        (mapcat (fn [val]
 		 (if (seq? val)
 		   (flatten-track tmap val (/ len (count val)))
@@ -377,11 +376,11 @@
 
 (defn finalized-track-wave
   [ftrk]
-  (wave [:and ctrk ftrk s -1]
+  (wave [:and ctrk ftrk s 1]
    (let [[[val len mp] & tail :as ctrk] ctrk]
      (if (< s len)
        (give val ctrk        (inc s))
-       (give val (next ctrk) -1)))))
+       (give val (next ctrk) 1)))))
 
 (defn track-wave
   "Takes a track and returns a wave that modulates based on its value."

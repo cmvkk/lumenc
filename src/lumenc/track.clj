@@ -42,7 +42,7 @@
 		(contains? (set (:sharps mp)) letr) +1
 		true 0)]
     (if moct
-      (+ (* moct 12) (*note-nums* letr) offset) ;if an octave exists, use it
+      (+ (* (Character/digit moct 10) 12) (*note-nums* letr) offset) ;if an octave exists, use it
       (if (not last-val)
 	(+ (* (or (:oct mp) 4) 12) (*note-nums* letr) offset) ;if no last value, we use the default octave
 	(let [possible-nums (map #(+ (* % 12) (*note-nums* letr) offset) (range 8))
@@ -65,8 +65,8 @@
    (if (not (first trk))
      nil
      (let [[val len mp] (first trk)
-	   new-val (get-note val mp last-val)]
-       (cons [new-val len mp] (get-notes (rest trk) new-val))))))
+	   new-val (if (= val '.) '. (get-note val mp last-val))]
+       (cons [new-val len mp] (get-notes (rest trk) (if (= new-val '.) last-val new-val)))))))
 	   
 (defmethod initial-pass :note 
   [trk typ]
@@ -74,7 +74,7 @@
 
 (defmethod final-pass :note
   [[val len mp] typ]
-  [(*chromatic* val) len mp])
+  [(if (= val '.) '. (*chromatic* val)) len mp])
 
 
 ;; ARPEGGIO TRACK
@@ -121,7 +121,19 @@
   [frame typ]
   frame)
 
+;; REST-ZERO
 
+(defmethod initial-pass :rest-zero
+  [trk typ]
+  (map (fn [[val len mp :as frame]]
+	 (if (= val '.)
+	   [0 len mp]
+	   frame))
+       trk))
+
+(defmethod final-pass :rest-zero
+  [frame typ]
+  frame)
 
 ;; TRACK FNS
 
