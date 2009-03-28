@@ -10,7 +10,7 @@
 
 (def *rate* 44100)
 (def *bpm* 120)
-(def *num-chunks* 25)
+(def *num-chunks* 80)
 (def *max-amp* 33554431) ; currently 2^25-1.  The actual intermediate
                          ; amplitudes are stored as signed 4-byte integers, making it possible
                          ; to write filters with a net gain of 64 before having to worry about
@@ -47,6 +47,17 @@
 
 (defmacro hold []
   `((deref ~'prev-sample) 1))
+
+(defmacro give [ret & args]
+  `(cons ~ret (~'llfn ~@args)))
+
+(defmacro lazy-loop [args & body]
+  (let [fargs (map first (partition 2 args))
+        inits (map second (partition 2 args))]
+    `(let [~'llfn (fn ~'llfn ~(into [] fargs)
+                    (lazy-seq
+                      ~@body))]
+       (~'llfn ~@inits))))
 
 ;; RENDERER
 
@@ -86,32 +97,41 @@
     (when (> (- end csize) 0)
       (recur bos bb rform (- end csize) chunk-size))))
 
-(defn write-data
-  [bos form start end]
-  (let [chunk-size (int (Math/ceil (/ (- end start) *num-chunks*)))
-	bb (java.nio.ByteBuffer/allocate (* 4 chunk-size))]
-    (.order bb java.nio.ByteOrder/LITTLE_ENDIAN)
-    (write-chunks bos bb form end chunk-size)))
-  
-(defn render
+(defmacro render
   "Renders a wave into an actual .wav file."
   [[path end] form]
-  (let [file (new java.io.File path)
-        fos (new java.io.FileOutputStream file)
-        bos (new java.io.BufferedOutputStream fos)]
-    (println "Writing" end "samples to" file)
-    (println "----|----|----|----|----|")
-    (.write bos (get-header 0 end) 0 44)
-    (write-data bos form 0 end)
-    (.flush bos)
-    (.close bos)))
+  `(let [file# (new java.io.File ~path)
+	 fos# (new java.io.FileOutputStream file#)
+	 bos# (new java.io.BufferedOutputStream fos#)
+	 end# ~end
+	 ntime# (java.lang.System/nanoTime)]
+     (printf "Writing %d samples (%.2f seconds) to <%s>" end# (float (/ end# *rate*)) ~path)
+     (println "\n         |         |25%      |         |50%      |         |75%      |         |")
+     (println   "----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|")
+     (.write bos# (get-header 0 end#) 0 44)
+     (let [chunk-size# (int (Math/ceil (/ end# *num-chunks*)))
+	   bb# (java.nio.ByteBuffer/allocate (* 4 chunk-size#))]
+       (.order bb# java.nio.ByteOrder/LITTLE_ENDIAN)
+       (write-chunks bos# bb# ~form end# chunk-size#))
+     (let [etime# (java.lang.System/nanoTime)
+	   ttime# (- etime# ntime#)
+	   real-nsps# (/ ttime# end#)
+	   want-nsps# (/ 1000000000 *rate*)
+	   rat# (/ want-nsps# real-nsps#)]
+       (printf "In %.2f seconds (%.2fx real time)." (/ ttime# 1000000000.0) (float rat#))
+       (println "\n"))
+     (.flush bos#)
+     (.close bos#)))
 
 ;; OPERATORS
 
 (declare track?)
 (declare track-wave)
 
-(defn parse-wave-args [args]
+(defn parse-wave-args 
+  "Takes the arguments for 'wave', and splits them up as necessary to be used in the different
+   places of the macro expansion."
+  [args]
   (if (empty? args)
     [[] [] [] []]
     (loop [waves []  ;list of waves
@@ -142,7 +162,9 @@
 	   (recur waves rests nfargs binds ninits (next tail) inand)
 	   [waves rests nfargs binds ninits]))))))
 
-(defn wave-opts [waves]
+(defn wave-opts 
+  "Expands the code that coerces various input values of 'wave' into lazy-seq form."
+  [waves]
   (map (fn [wav] `(cond 
                     (seq? ~wav) ~wav
                     (track? ~wav) (track-wave ~wav)
@@ -150,19 +172,33 @@
                     true (repeat ~wav)))
        waves))
 
-(defn expand-give [[give ret & args] rests myfn]
+(defn expand-give 
+  "Manually expands the 'give' call into actual code."
+  [[give ret & args] rests myfn]
   (if (not (= give 'give))
     (throw Exception)
     `(cons ~ret (~myfn ~@(map (fn [r] `(rest ~r)) rests) ~@args))))
 
-(defn find-give [body rests myfn]
+(defn find-give 
+  "Helper function for wave, this traverses through the body of wave looking for 
+   a sequence that starts with the symbol 'give, then calls expand-give on it."
+  [body rests myfn]
   (if (not (seq? body))
     body
     (if (= (first body) 'give)
       (expand-give body rests myfn)
       (map #(find-give % rests myfn) body))))
 
-(defmacro wave [args & body]
+(defmacro wave 
+  "Takes a set of arguments and a body.  The arguments take the form of
+   [waves* :and bindings*] where waves are input waves (must be symbols), 
+   and bindings are let-like bindings of anything.  The body is called for every
+   element of the resultant wave, and for each iteration, the symbol for each
+   input wave is bound to the current element for that wave.  You can then use
+   the function 'give' to return.  'give's first argument is a return value for
+   that element in the wave, and the other arguments are for rebinding the initial
+   bindings, a la recur."
+  [args & body]
   (let [[waves rests fargs binds inits] (parse-wave-args args)
         myfn (gensym)]
     `(let [~myfn (fn ~myfn ~(into [] fargs)
@@ -171,7 +207,11 @@
                      ~@(map #(find-give % rests myfn) body))))]
        (~myfn ~@(wave-opts waves) ~@inits))))
 
-(declare give)
+(defmacro deffilter 
+  "Defines a filter.  Exactly the same syntax as defn."
+  [& stuff]
+  `(defn ~@stuff))
+
 
 (defmacro stack
   "Takes a series of label/filter pairs, binding the return value of each filter to the corresponding
@@ -202,7 +242,10 @@
 	 (~'give (int (+ ~@gens)))))))
 
 (defmacro rstack
-  "Add this"
+  "Takes a series of let-like bindings, with a symbol paired to a form that returns a wave.
+   The symbols can then be passed as arguments to each other's forms, producing mutually 
+   recursive waves.  In order for this to work properly, one of the filters must be a 
+   delay filter (i.e. 'buffer' or 'shift')."
   [& forms]
   (let [len (/ (count forms) 2)
 	atomlist (gensym)]
@@ -215,106 +258,83 @@
 		`(reset! (nth ~atomlist ~i) ~(nth forms (inc (* i 2))))) 
 	      (range len)))))
 
-		
-(defn track? 
-  "Returns true if object is a track."
-  [mtrk]
-  (and (vector? mtrk)
-       (= (:track (first mtrk)) true)))
-
-(defmulti initial-pass (fn [trk typ] typ))
-
-(defn initial-p
-  "Calls the initial pass method for each of the tracks types.  Also removes
-   a possible 'blank frame' from the beginning of the track, and assigns it a default
-   type if one doesn't already exist.  This is intended to be run during deftrack."
-  [[mp & trk]]
-  (let [nmp (if (:type mp) mp (assoc mp :type [:note]))]
-    (loop [ntrk (cons mp (if (= (first trk) [\. 0 0]) (rest trk) trk)) 
-	   tvec (:type nmp)]
-      (if tvec
-	(recur (initial-pass ntrk (first tvec)) (next tvec))
-	ntrk))))
-
-(defmulti final-pass (fn [trk typ] typ))
-
-
-(defn final-p
-  "Calls the final pass method for each of the tracks types.  Also converts beat lengths
-   to sample lengths, and removes the no-longer-necessary map from the beginning.  This
-   is intended to be run during with-track, or when passing a track to a filter."
-  [[mp & trk]]
-  (loop [ntrk (cons mp trk)
-	 tvec (:type mp)]
-    (if tvec
-      (recur (final-pass ntrk (first tvec)) (next tvec))
-      (map (fn [[num s e]]
-	     [num (beats s) (beats e)]) (next ntrk)))))
-
-
-(defn finalized-track-wave
-  [ftrk]
-  (wave [:and ctrk ftrk s 0]
-    (loop [[[val start end] & tail :as ctrk] ctrk]
-      (if (and (>= s start) (<= s end))
-	(give val ctrk (inc s))
-	(if tail
-	  (recur tail)
-	  (give 0 [[0 0 0]] s))))))
-
-
-(defn track-wave
-  "Takes a track and returns a wave that modulates based on its value."
-  [trk]
-  (finalized-track-wave (final-p trk)))
-
-
-(defmacro deffilter [& stuff]
-  `(defn ~@stuff))
-
 
 ;; DEFTRACK
 
-(defn do-track-times 
-  "The input track here has only lengths of time in its frames, but what we need is
-   start time and end time.  Uses a running time count to calculate this."
+(defmulti initial-pass 
+  "This method is run once for each type supplied for a track.  It takes a whole track object
+   as well as a type keyword, and returns a new track object."
+  (fn [trk typ] typ))
+
+(defn initial-p 
+  "Hooks the track into the initial-pass methods for each of its types.  Intended
+   to be run before the track is returned from deftrack."
   [trk]
-  (loop [[[val len] & tail] trk
-	 ntrk []
-	 time 0]
-    (if tail
-      (recur tail (conj ntrk [val time (+ len time)]) (+ len time))
-      (conj ntrk [val time (+ len time)]))))
-    
+  (loop [types (:type ((first trk) 2))
+	 ctrk trk]
+    (println "Inside initial-p loop, first types is" (first types))
+    (if types
+      (recur (next types) (initial-pass ctrk (first types)))
+      ctrk)))
+
+(defmulti final-pass 
+  "This method is run once for each type supplied for a track frame.  It takes a single track
+   frame as well as a type keyword, and returns a new track frame."
+  (fn [frame typ] typ))
+
+(defn final-p
+  "Hooks the track into the final-pass methods for each of its types, and also
+   changes beat lengths to samples.  Intended to be run just before the track is used in a wave."
+  [trk]
+  (map (fn [[val len mp :as frame]]
+	 (loop [types (:types mp)
+		cf frame]
+	   (if types
+	     (recur (next types) (final-pass cf (first types)))
+	     cf)))
+       (map (fn [[val len mp]] [val (beats len) mp]) trk)))
+
+(defn collapse-holds
+  "Takes a track object and removes holds, i.e. taking any frame with val '* and 
+   removing it, adding its length to the immediately previous frame."
+  [tseq]
+  (lazy-seq
+    (let [[val len mp] (first tseq)]
+      (if (= val '*)
+	(throw (new Exception "Can't start a track with a hold."))
+	(if (not (next tseq))
+	  (cons [val len mp] nil)
+	  (loop [[[nval nlen nmp] :as nseq] (next tseq)
+		 tlen len]
+	    (if (= nval '*)
+	      (recur (rest nseq) (+ tlen nlen))
+	      (cons [val tlen mp] (collapse-holds nseq)))))))))
 
 (defn flatten-track
-  "Given a track input, takes the track and flattens it, returns a vector of 'frames', which contain a note and the 
-   length it is to be played, in beats."
-  [trk res note-len]
-  (if trk
-    (if (list? (first trk))
-      (let [inner-res (flatten-track (first trk) [(or (last res) [\. 0])] (/ note-len (count (first trk))))]
-	(recur (next trk) (apply conj (if (empty? res) res (pop res)) inner-res) note-len))
-      (if (= (first trk) '*)
-	(let [prev-note (last res)]
-	  (recur (next trk) (conj (pop res) [(first prev-note) (+ note-len (second prev-note))]) note-len))
-	(recur (next trk) (conj res [(first trk) note-len]) note-len)))
-    res))
+  "Takes a vector and map from deftrack, and 'flattens' it into a lazy-seq
+   of actual track frames."
+  ([tmap tvec]
+     (flatten-track tmap tvec nil))
+  ([tmap tvec len]
+     (let [len (or len (:bpn tmap) 1)]
+       (println "inside flatten-track")
+       (mapcat (fn [val]
+		 (if (seq? val)
+		   (flatten-track tmap val (/ len (count val)))
+		   [[val len tmap]]))
+	       tvec))))
 
-(defn refine-tracks 
-  "Input here is a map of names connected to a vector of values that are associated with it.  This function
-   joins the values into a full track, then passes the track to get 'flattened' and otherwise edited according
-   to its type."
-  [res]
-  (into {} (map (fn [[name values]]
-		  (let [maps (filter map? values)
-			fmap (or (apply merge maps) {})
-			vecs (filter vector? values)
-			fvec (apply concat vecs)
-			nvec (do-track-times (flatten-track fvec [] (or (:bpn fmap) 1)))]
-		    [name (initial-p (into [] (cons (assoc fmap :track true) nvec)))])) 
-		res)))
-	   
+(defn refine-track
+  "Takes a set of input values from deftrack and returns an actual track object."
+  [values]
+  (let [tmap (if-let [mp (apply merge (filter map? values))]
+	       (if (:type mp)
+		 mp
+		 (assoc mp :type [:note]))
+	       {:type [:note]})
+	tvec (apply concat (filter vector? values))]
+    (with-meta (initial-p (collapse-holds (flatten-track tmap tvec))) {:type :track})))
+
 (defn add-to-res 
   "Helper function to deftrack-fn, takes a 'chunk' of names and track pieces, and adds them to the result map."
   [res names data]
@@ -336,38 +356,50 @@
       (add-to-res res names data)
       res)))
 
-(defmacro deftrack 
-  "The main macro.  Takes a list of name*/value* pairs and associates
-   them together, binding all the associated values to the name. See
+(defmacro deftrack
+  "The main macro.  This takes a list of name*/value* pairs and associates
+   them together, binding all the associated values to the name.  See
    documentation elsewhere for details..."
   [& forms]
-  (let [res (refine-tracks (deftrack-fn {} [] [] true forms))]
+  (let [res (deftrack-fn {} [] [] true forms)]
     `(do
-       ~@(map (fn [[name trk]]
-		`(def ~name ~(into [] trk))) res))))
+       ~@(map (fn [[key val]]
+		`(def ~key (refine-track (quote ~val))))
+	      res))))
+
+
+;; TRACK-WAVE
+
+(defn track?
+  "Returns true if object is a track."
+  [mtrk]
+  (= (:type ^mtrk) :track))
+
+(defn finalized-track-wave
+  [ftrk]
+  (wave [:and ctrk ftrk s -1]
+   (let [[[val len mp] & tail :as ctrk] ctrk]
+     (if (< s len)
+       (give val ctrk        (inc s))
+       (give val (next ctrk) -1)))))
+
+(defn track-wave
+  "Takes a track and returns a wave that modulates based on its value."
+  [trk]
+  (finalized-track-wave (concat (final-p trk) (repeat [0 10000 {}]))))
 
 ;; WITH-TRACK
 
-(defn split-track 
-  "Splits a track at the given sample number.  Track 1 ends at sn, Track 2 starts at sn+1."
+(defn split-track
+  "Splits a track at a given length (in samples)."
   [trk sn]
-  (if (not (seq trk))
-    [[[0 sn (inc sn)]] []]
-    (loop [track1 [] [c start end] (first trk) track2 (next trk)]
-      (if (and (>= sn start) (<= sn end)) ; splitting at curframe.
-	(if (= sn end) ; even split
-	  [(into [] (concat track1 [[c start end]]))                                     track2]
-	  [(into [] (concat track1 [[c start  sn]])) (into [] (concat [[c (inc sn) end]] track2))])
-	(if track2 ; not at the end
-	  (recur (concat track1 [[c start end]]) (first track2) (next track2))
-	  [(into [] (concat track1 [[c start end]])) nil])))))
-
-(defn set-to-zero
-  "Takes a track and sets it to zero."
-  [trk]
-  (let [sval ((first trk) 2)]
-    (into [] (map (fn [[v s e]]
-		    [v (- s sval) (- e sval)]) trk))))
+  (loop [track1 []
+	 [[val len mp] & tail :as track2] trk
+	 s sn]
+    (cond
+     (= s len) [(with-meta (conj track1 [val s mp]) {:type :track}) (with-meta tail {:type :track})]
+     (< s len) [(with-meta (conj track1 [val s mp]) {:type :track}) (with-meta (cons [val (- len s) mp] tail) {:type :track})]
+     (> s len) (recur (conj track1 [val len mp]) tail (- s len)))))
 
 (defn get-next-track-val
   "Takes a track, splits it up at sn, and then returns a value
@@ -378,39 +410,24 @@
   (let [[b a] (split-track trk sn)]
     (if (= (count b) 1)
       [(first (first b)) a]
-      [(finalized-track-wave (set-to-zero b)) a])))
+      [(finalized-track-wave b) a])))
 
 (defn get-total-track
-  "Helper function for with-track.  Takes a list of tracks and 
-   a function, and splits up the tracks based on the frames in the
-   first track, calling the function with the values produced each time
-   and swapping in the resultant wave."
-  [trks func]
-  (let [[mtrk & rtrks] trks]
-    (loop [[[val start end] & tail] (first trks) rtrks (next trks) res []] 
-      (let [firsts (map #(first (get-next-track-val % end)) rtrks)
-	    seconds (map #(second (get-next-track-val % end)) rtrks)]
-	(if tail
-	  (recur tail seconds (concat res [[(apply func (cons val firsts)) start end]]))
-	  (into [] (concat res [[(apply func (cons val firsts)) start end]])))))))
-
-;(defn with-track-fn 
-;  "Helper function for with-track.  See with-track."
-;  [trks func] 
-;  (let [ntrk (get-total-track (map final-p trks) func)]
-;    (wave [:and ctrk ntrk s 0 cwav ]
-;     (loop [[[wav start end] & tail :as ctrk] ctrk]
-;       (if (and (>= s start) (<= s end))
-;	 (give wav ctrk (inc s))
-;	 (if tail
-;	   (recur tail)
-;	   (give 0 [[0 0 0]] s)))))))
+  "Given a series of tracks and a function, returns a track whose vals are waves representing
+   the application of that function to the values of each track."
+  [[[[val len mp] & tail] & rtrks] func]
+  (lazy-seq
+   (let [splits (map #(get-next-track-val % len) rtrks)
+	 res [(apply func (cons val (map first splits))) len mp]]
+     (cons res (get-total-track (cons tail (map second splits)) func)))))
 
 (defn with-track-fn
+  "Helper function for with-track.  Takes a sequence of tracks and a function and returns a
+   wave, as per the with-track macro."
   [trks func]
-  (let [ntrk (get-total-track (map final-p trks) func)]
-    (mapcat (fn [[wav start end]]
-	      (take (- end start) wav))
+  (let [ntrk (get-total-track (map #(concat (final-p %) (repeat [0 10000 {}])) trks) func)]
+    (mapcat (fn [[val len mp]]
+	      (take len val))
 	    ntrk)))
 
 (defmacro with-track 

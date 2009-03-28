@@ -24,93 +24,102 @@
 
 (def *note-nums* {\c 0 \d 2 \e 4 \f 5 \g 7 \a 9 \b 11})
 
-(defn get-note 
-  "Given a note symbol, plus a set of options and a current octave, returns the note number for that note."
-  [note opts oct]
-  (let [note (seq (str note))]
-    (if (= (first note) \.)
-      [\. oct]
-      (let [cur-oct (if-let [moct (first (filter #(Character/isDigit %) note))]
-		      (Character/digit moct 10)
-		      oct)
-	    alter (cond
-		   (contains? (set (next note)) \b) -1
-		   (contains? (set (next note)) \#) 1
-		   (contains? (set (next note)) \n) 0
-		   (contains? (set (:flats opts)) (first note)) -1
-		   (contains? (set (:sharps opts)) (first note)) 1
-		   true 0)]
-	[(+ 12 (* cur-oct 12) (*note-nums* (first note)) alter) cur-oct]))))
+(defn get-note-direction
+  [note]
+  (let [plus-count (count (filter (set (list \+)) note))
+	minus-count (count (filter (set (list \-)) note))]
+    (- plus-count minus-count)))
 
-(defn get-notes 
-  "Given a flattened track, takes the note symbols from the frames and replaces them with note numbers."
-  [trk opts]
-  (loop [[[note times timee] & tail] trk 
-	 res []
-	 oct (or (:oct opts) 4)]
-    (let [[freq new-oct] (get-note note opts oct)
-	  new-res (conj res [freq times timee])]
-      (if tail
-	(recur tail new-res new-oct)
-	new-res))))
+(defn get-note
+  [val mp last-val]
+  (let [[letr & note] (seq (str val)) ; letr is the note letter, note is the extra stuff
+	moct (first (filter #(Character/isDigit %) note)) ;get an octave if one exists
+	offset (cond
+		(contains? (set note) \b) -1
+		(contains? (set note) \#) +1
+		(contains? (set note) \n)  0
+		(contains? (set (:flats  mp)) letr) -1
+		(contains? (set (:sharps mp)) letr) +1
+		true 0)]
+    (if moct
+      (+ (* moct 12) (*note-nums* letr) offset) ;if an octave exists, use it
+      (if (not last-val)
+	(+ (* (or (:oct mp) 4) 12) (*note-nums* letr) offset) ;if no last value, we use the default octave
+	(let [possible-nums (map #(+ (* % 12) (*note-nums* letr) offset) (range 8))
+	      direction (get-note-direction note)]
+	  (cond 
+	   (= direction 0)
+	   (reduce (fn [x y]                           ; direction is 0, so we use note closest to last-val   
+		     (if (< (Math/abs (- last-val x)) 
+			    (Math/abs (- last-val y))) 
+		       x y))
+		   possible-nums)
+	    (< direction 0)                            ; grab the nth possible val greater/lesser than the last val
+	    (nth (reverse (filter #(< % last-val) possible-nums)) (dec (- direction)))
+	    (> direction 0)
+	    (nth          (filter #(> % last-val) possible-nums)  (dec direction))))))))
+	    	 
+(defn get-notes
+  [trk last-val]
+  (lazy-seq
+   (if (not (first trk))
+     nil
+     (let [[val len mp] (first trk)
+	   new-val (get-note val mp last-val)]
+       (cons [new-val len mp] (get-notes (rest trk) new-val))))))
+	   
+(defmethod initial-pass :note 
+  [trk typ]
+  (get-notes trk nil))
 
-(defmethod initial-pass :note [[mp & trk] t]
-  (let [new-trk (get-notes trk mp)]
-    (into [] (cons mp new-trk))))
+(defmethod final-pass :note
+  [[val len mp] typ]
+  [(*chromatic* val) len mp])
 
-(defmethod final-pass :note [[mp & trk] t]
-  (into [] (cons mp (map (fn [[note s e]]
-			   [(if (not= \. note)
-			      (*chromatic* note) 0) s e]) trk))))
 
 ;; ARPEGGIO TRACK
 
-(defn get-arpeggio [note s e alen]
-  (let [asize (count note)]
-    (loop [cura 0
-	   left (- e s)
-	   sofar s
-	   res []]
-      (let [clen (min left alen)
-	    cnote (note cura)]
-	(if (> (- left clen) 0) ; still some time left
-	  (recur (mod (inc cura) asize)
-		 (- left clen)
-		 (+ sofar clen)
-		 (concat res [[cnote sofar (+ sofar clen)]]))
-	  (concat res [[cnote sofar (+ sofar clen)]]))))))
+(defmethod initial-pass :arpeggio
+  [trk typ]
+  (mapcat (fn [[val len mp :as frame]]
+	    (if (vector? val)
+	      (lazy-loop [cura 0
+			  left len]
+		(let [clen (min left (:alen mp))
+		      cnote (val cura)]
+		  (if (> (- left clen) 0)
+		    (give [cnote clen mp] 
+			  (mod (inc cura) (count val)) 
+			  (- left clen))
+		    (list [cnote clen mp]))))
+	      [frame]))
+	  trk))
 
-(defmethod initial-pass :arpeggio [[mp & trk] t]
-  (let [alen (or (:alen mp) 1/10)]
-    (into [] (cons mp 
-		   (apply concat (map (fn [[note s e]]
-					(if (vector? note)
-					  (get-arpeggio note s e alen)
-					  [[note s e]])) trk))))))
 
-(defmethod final-pass :arpeggio [trk t]
-  trk)
-
+(defmethod final-pass :arpeggio 
+  [frame typ]
+  frame)
 
 ;; OPTION TRACK
 
-(defmethod initial-pass :option [trk t]
+(defmethod initial-pass :option 
+  [trk typ]
   trk)
 
-(defmethod final-pass :option [[mp & trk] t]
-  (let [omap (:opts mp)]
-    (into [] (cons mp (map (fn [[note s e]]
-			     [(omap note) s e]) trk)))))
-
+(defmethod final-pass :option
+  [[val len mp] typ]
+  [((:opts mp) val) len mp])
 
 
 ;; RAW TRACK
 
-(defmethod initial-pass :raw [trk t]
+(defmethod initial-pass :raw 
+  [trk typ]
   trk)
 
-(defmethod final-pass :raw [trk t]
-  trk)
+(defmethod final-pass :raw 
+  [frame typ]
+  frame)
 
 
 
@@ -118,11 +127,10 @@
 
 (defn transpose
   "Changes the track's key by num semitones."
-  [num [mp & trk]]
-  (into [] (cons mp
-		 (map (fn [[val start end]]
-			(if (= val \.)
-			  [0 start end]
-			  [(+ val num) start end])) trk))))
-
+  [num trk]
+  (map (fn [[val len mp]]
+	 (if (= val \.)
+	   [0 len mp]
+	   [(+ val num) len mp]))
+       trk))
 
